@@ -1,0 +1,198 @@
+---
+title: "List My Tasks"
+description: "Retrieve all tasks assigned to the current user"
+---
+
+## Endpoint
+
+<CodeGroup>
+```http
+GET /api/v1/me/tasks
+```
+</CodeGroup>
+
+Retrieves all human tasks assigned to the authenticated user. Tasks can be assigned directly by user ID, email, or through role/group assignments.
+
+## Authentication
+
+This endpoint requires authentication. Include a valid Bearer token in the Authorization header.
+
+## Response Schema
+
+Returns a list of human tasks.
+
+<ResponseField name="items" type="array">
+  Array of human task objects
+  
+  <Expandable title="HumanTaskResponse">
+    <ResponseField name="id" type="uuid" required>
+      Unique identifier for the task
+    </ResponseField>
+    
+    <ResponseField name="workflowInstanceId" type="uuid" required>
+      ID of the workflow instance this task belongs to
+    </ResponseField>
+    
+    <ResponseField name="stepInstanceId" type="uuid" required>
+      ID of the step instance this task belongs to
+    </ResponseField>
+    
+    <ResponseField name="stepDefinitionId" type="uuid" required>
+      ID of the step definition
+    </ResponseField>
+    
+    <ResponseField name="stepCode" type="string" required>
+      Unique code identifying the step
+    </ResponseField>
+    
+    <ResponseField name="stepLabel" type="string" required>
+      Human-readable label for the step
+    </ResponseField>
+    
+    <ResponseField name="assignedUserId" type="string">
+      User ID this task is assigned to (if assigned to a specific user)
+    </ResponseField>
+    
+    <ResponseField name="assignedRoleKey" type="string">
+      Role key this task is assigned to (if assigned to a role)
+    </ResponseField>
+    
+    <ResponseField name="assignedGroupKey" type="string">
+      Group key this task is assigned to (if assigned to a group)
+    </ResponseField>
+    
+    <ResponseField name="approvalModeSnapshot" type="string" required>
+      Approval mode for this task: `priority_chain`, `approve_any_one`, `approve_all`, or `notify_all`
+    </ResponseField>
+    
+    <ResponseField name="priorityRank" type="integer">
+      Priority rank of this task
+    </ResponseField>
+    
+    <ResponseField name="sequenceNo" type="integer" required>
+      Sequence number in the approval chain
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Current task status: `queued`, `open`, `claimed`, `completed`, `expired`, or `cancelled`
+    </ResponseField>
+    
+    <ResponseField name="availableActions" type="array" required>
+      List of action types available for this task (e.g., `["approve", "reject"]`)
+    </ResponseField>
+    
+    <ResponseField name="dueAt" type="string">
+      ISO 8601 timestamp when the task is due (for reminder purposes)
+    </ResponseField>
+    
+    <ResponseField name="escalationDueAt" type="string">
+      ISO 8601 timestamp when the task will escalate to the next assignee
+    </ResponseField>
+    
+    <ResponseField name="createdAt" type="string" required>
+      ISO 8601 timestamp when the task was created
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Request
+
+<CodeGroup>
+```bash cURL
+curl -X GET "https://api.example.com/api/v1/me/tasks" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"
+```
+
+```javascript JavaScript
+const response = await fetch('https://api.example.com/api/v1/me/tasks', {
+  method: 'GET',
+  headers: {
+    'Authorization': 'Bearer YOUR_ACCESS_TOKEN'
+  }
+});
+
+const data = await response.json();
+```
+
+```python Python
+import requests
+
+response = requests.get(
+    'https://api.example.com/api/v1/me/tasks',
+    headers={'Authorization': 'Bearer YOUR_ACCESS_TOKEN'}
+)
+
+data = response.json()
+```
+</CodeGroup>
+
+## Example Response
+
+<CodeGroup>
+```json 200 OK
+{
+  "items": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001",
+      "workflowInstanceId": "550e8400-e29b-41d4-a716-446655440000",
+      "stepInstanceId": "550e8400-e29b-41d4-a716-446655440002",
+      "stepDefinitionId": "550e8400-e29b-41d4-a716-446655440003",
+      "stepCode": "manager_approval",
+      "stepLabel": "Manager Approval",
+      "assignedUserId": "user_123",
+      "assignedRoleKey": null,
+      "assignedGroupKey": null,
+      "approvalModeSnapshot": "priority_chain",
+      "priorityRank": 1,
+      "sequenceNo": 1,
+      "status": "open",
+      "availableActions": ["approve", "reject", "revert"],
+      "dueAt": "2026-03-15T14:30:00Z",
+      "escalationDueAt": "2026-03-16T14:30:00Z",
+      "createdAt": "2026-03-14T10:00:00Z"
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440004",
+      "workflowInstanceId": "550e8400-e29b-41d4-a716-446655440005",
+      "stepInstanceId": "550e8400-e29b-41d4-a716-446655440006",
+      "stepDefinitionId": "550e8400-e29b-41d4-a716-446655440007",
+      "stepCode": "review_request",
+      "stepLabel": "Review Request",
+      "assignedUserId": null,
+      "assignedRoleKey": "reviewer",
+      "assignedGroupKey": null,
+      "approvalModeSnapshot": "approve_any_one",
+      "priorityRank": null,
+      "sequenceNo": 1,
+      "status": "open",
+      "availableActions": ["approve", "reject"],
+      "dueAt": null,
+      "escalationDueAt": null,
+      "createdAt": "2026-03-14T09:00:00Z"
+    }
+  ]
+}
+```
+</CodeGroup>
+
+## Task Assignment Logic
+
+The endpoint returns tasks that match any of the following criteria:
+
+- Tasks assigned directly to the user's ID (`assigned_user_id` matches)
+- Tasks assigned to the user's email address
+- Tasks assigned to roles that the user has
+
+## Task Status Filters
+
+The endpoint returns tasks in all statuses, including:
+- **queued**: Waiting in a priority chain
+- **open**: Ready for action
+- **claimed**: Claimed but not yet completed
+- **completed**: Action has been taken
+- **cancelled**: Task was cancelled
+- **expired**: Task exceeded its deadline
+
+<Note>
+Only tasks with status `open` can be actioned. Use the `availableActions` field to determine which actions are permitted for each task.
+</Note>

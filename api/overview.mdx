@@ -1,0 +1,238 @@
+---
+title: API Overview
+description: Complete reference for the Workflow Engine Platform REST API
+---
+
+## Introduction
+
+The Workflow Engine API is a FastAPI-based REST service that powers the async workflow engine with human-in-the-loop processing. The API provides endpoints for:
+
+- Managing workflow definitions and versions
+- Starting and monitoring workflow instances
+- Executing human task actions (approve, reject, revert)
+- Accessing notifications and task inbox
+
+## Base URL
+
+The API is available at the following base URLs depending on your environment:
+
+<CodeGroup>
+```bash Development
+http://localhost:8000
+```
+
+```bash Production
+https://api.your-domain.com
+```
+</CodeGroup>
+
+<Note>
+  All API requests require authentication via JWT tokens issued by Better Auth. See the [Authentication](/api/authentication) page for details.
+</Note>
+
+## API Version
+
+The current API version is **v0.1.0**. All endpoints are prefixed with `/api/v1/` to support future versioning.
+
+## API Structure
+
+Endpoints are organized into logical groups:
+
+### System Endpoints
+- `GET /` - Service status and environment info
+- `GET /healthz` - Health check with infrastructure status
+- `GET /api/v1/foundation` - Stack and capability snapshot
+
+### Authentication
+- `GET /api/v1/me` - Current user information
+
+### Workflow Definitions
+- `GET /api/v1/workflow-definitions` - List all workflow definitions
+- `GET /api/v1/workflow-definitions/{id}` - Get workflow definition details
+- `POST /api/v1/workflow-definitions` - Create new workflow definition
+- `PUT /api/v1/workflow-definitions/{id}` - Update workflow definition
+- `POST /api/v1/workflow-definitions/{id}/publish` - Publish workflow version
+- `POST /api/v1/workflow-definitions/{id}/clone` - Clone workflow definition
+
+### Workflow Instances (Runtime)
+- `POST /api/v1/workflow-instances` - Start new workflow instance
+- `GET /api/v1/workflow-instances` - List workflow instances
+- `GET /api/v1/workflow-instances/{id}` - Get instance details
+
+### Human Tasks
+- `GET /api/v1/me/tasks` - Get current user's tasks
+- `POST /api/v1/human-tasks/{id}/approve` - Approve a task
+- `POST /api/v1/human-tasks/{id}/reject` - Reject a task
+- `POST /api/v1/human-tasks/{id}/revert` - Revert a task
+- `POST /api/v1/human-tasks/{id}/actions` - Execute custom action
+
+### Notifications
+- `GET /api/v1/me/notifications` - Get current user's notifications
+- `POST /api/v1/notifications/{id}/read` - Mark notification as read
+
+## Response Format
+
+All API responses follow a consistent JSON structure:
+
+### Success Response
+
+```json
+{
+  "service": "workflow-engine-api",
+  "environment": "development",
+  "message": "Workflow Engine API foundation is running."
+}
+```
+
+### List Response
+
+List endpoints return items in an `items` array:
+
+```json
+{
+  "items": [
+    {
+      "id": "uuid",
+      "name": "Invoice Approval",
+      "status": "active"
+    }
+  ]
+}
+```
+
+### Single Item Response
+
+Single item endpoints wrap the object in an `item` property:
+
+```json
+{
+  "item": {
+    "id": "uuid",
+    "name": "Invoice Approval",
+    "status": "active"
+  }
+}
+```
+
+## Error Handling
+
+The API uses standard HTTP status codes and returns detailed error messages:
+
+### Error Response Format
+
+```json
+{
+  "detail": "Error message describing what went wrong"
+}
+```
+
+### Common Status Codes
+
+| Status Code | Meaning | Description |
+|-------------|---------|-------------|
+| `200` | OK | Request succeeded |
+| `201` | Created | Resource created successfully |
+| `400` | Bad Request | Invalid request parameters |
+| `401` | Unauthorized | Missing or invalid authentication token |
+| `403` | Forbidden | Insufficient permissions |
+| `404` | Not Found | Resource does not exist |
+| `409` | Conflict | Resource conflict (e.g., duplicate key) |
+| `422` | Unprocessable Entity | Validation error with detailed messages |
+| `500` | Internal Server Error | Server-side error |
+
+### Validation Errors
+
+Validation errors (422) include an `errors` array:
+
+```json
+{
+  "detail": {
+    "errors": [
+      "Step codes must be unique.",
+      "Exactly one start step is required."
+    ]
+  }
+}
+```
+
+## Quick Example
+
+Here's a complete example of starting a workflow instance:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/workflow-instances \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workflowKey": "invoice_approval",
+    "inputData": {
+      "invoiceId": "INV-12345",
+      "amount": 1500.00,
+      "vendor": "Acme Corp"
+    },
+    "contextData": {
+      "requestedBy": "user@example.com"
+    }
+  }'
+```
+
+## CORS Configuration
+
+The API allows requests from:
+- The configured web app URL (default: `http://localhost:3000`)
+- Local development at `http://127.0.0.1:3000`
+
+All HTTP methods and headers are allowed for configured origins with credentials support.
+
+## Technology Stack
+
+The API is built with:
+
+- **Framework**: FastAPI
+- **Authentication**: Better Auth JWT verification
+- **Database**: PostgreSQL via Neon
+- **Queue**: RabbitMQ for async processing
+- **Package Manager**: `uv` for Python dependencies
+
+## Explore the API
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="lock" href="/api/authentication">
+    Learn how to authenticate API requests with Better Auth JWT tokens
+  </Card>
+  
+  <Card title="Workflow Definitions" icon="diagram-project" href="/api/definitions/list">
+    Create and manage workflow templates with steps and transitions
+  </Card>
+  
+  <Card title="Workflow Instances" icon="play" href="/api/instances/list">
+    Start, monitor, and control running workflow executions
+  </Card>
+  
+  <Card title="Human Tasks" icon="tasks" href="/api/tasks/list">
+    Execute approval, rejection, and custom actions on pending tasks
+  </Card>
+</CardGroup>
+
+## Rate Limiting
+
+<Info>
+  Rate limiting is not currently implemented. This feature is planned for future releases to ensure fair usage and API stability.
+</Info>
+
+## API Stability
+
+This is version **0.1.0** of the API. Breaking changes may occur as the platform evolves. Major version changes will be communicated via:
+
+- Updated base path (e.g., `/api/v2/`)
+- Deprecation notices in response headers
+- Migration guides in documentation
+
+## Support
+
+For API issues or questions:
+
+1. Check the endpoint-specific documentation
+2. Review error messages and validation feedback
+3. Inspect network requests with browser DevTools
+4. Verify JWT token validity and permissions

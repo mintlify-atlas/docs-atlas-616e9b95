@@ -1,0 +1,569 @@
+---
+title: Task Actions
+description: View task inbox, claim tasks, approve/reject/revert, add remarks, handle escalation, and understand approval policies
+---
+
+## Overview
+
+Tasks are actionable work items created when a workflow reaches a `human_task` step. This guide covers viewing your task inbox, performing actions, adding remarks, and understanding approval policies.
+
+## Prerequisites
+
+- Active workflow instance with a `human_task` step
+- Valid authentication token
+- Task assignment (direct user, role, or group)
+
+## Viewing Your Task Inbox
+
+<Steps>
+
+### Step 1: Fetch your tasks
+
+Retrieve all tasks assigned to you:
+
+```bash
+curl http://localhost:8000/api/v1/me/tasks \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response**:
+
+```json
+{
+  "items": [
+    {
+      "id": "dd0e8400-e29b-41d4-a716-446655440000",
+      "workflowInstanceId": "880e8400-e29b-41d4-a716-446655440000",
+      "stepInstanceId": "aa0e8400-e29b-41d4-a716-446655440000",
+      "stepDefinitionId": "bb0e8400-e29b-41d4-a716-446655440000",
+      "stepCode": "manager_approval",
+      "stepLabel": "Manager Approval",
+      "assignedUserId": "770e8400-e29b-41d4-a716-446655440000",
+      "assignedRoleKey": null,
+      "assignedGroupKey": null,
+      "approvalModeSnapshot": "priority_chain",
+      "priorityRank": 1,
+      "sequenceNo": 1,
+      "status": "open",
+      "availableActions": ["approve", "reject", "revert"],
+      "dueAt": "2026-03-15T10:30:00Z",
+      "escalationDueAt": "2026-03-15T10:30:00Z",
+      "createdAt": "2026-03-14T10:30:01Z"
+    }
+  ]
+}
+```
+
+### Step 2: Understand task fields
+
+**Task status values**:
+
+- `open`: Available for action
+- `queued`: Waiting for escalation (priority_chain mode)
+- `claimed`: Reserved by a user (optional claim step)
+- `completed`: Action has been taken
+- `expired`: Escalated to next user
+- `cancelled`: Workflow moved to next step
+
+**Available actions**:
+
+An array of allowed actions for this task:
+- `approve`: Move forward
+- `reject`: Reject and typically end workflow
+- `revert`: Send back to a previous step
+- Custom actions (if configured)
+
+**Priority and sequence**:
+
+- `priorityRank`: Priority level from step associations
+- `sequenceNo`: Notification order (1, 2, 3, ...)
+
+### Step 3: Filter tasks
+
+Filter client-side by:
+
+- **Status**: Show only `open` tasks
+- **Workflow**: Filter by `workflowInstanceId`
+- **Step**: Filter by `stepCode`
+- **Due date**: Sort by `dueAt`
+
+</Steps>
+
+## Performing Task Actions
+
+<Steps>
+
+### Step 1: Choose an action
+
+Check the task's `availableActions` array to see what's allowed.
+
+### Step 2: Prepare the action request
+
+```json
+{
+  "actionType": "approve",
+  "actionCode": null,
+  "remark": "Vendor documentation verified and approved",
+  "payload": {
+    "approvalNotes": "All checks passed"
+  }
+}
+```
+
+**Parameters**:
+
+- `actionType`: `approve`, `reject`, `revert`, or `custom`
+- `actionCode`: Required for custom actions
+- `remark`: Optional comment (may be required based on step config)
+- `payload`: Optional additional data
+
+### Step 3: Submit the action
+
+Use the generic actions endpoint:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/human-tasks/{task_id}/actions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "actionType": "approve",
+    "remark": "Vendor documentation verified and approved"
+  }'
+```
+
+Or use the dedicated action endpoints:
+
+<CodeGroup>
+
+```bash Approve
+curl -X POST http://localhost:8000/api/v1/human-tasks/{task_id}/approve \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"remark": "Approved"}'
+```
+
+```bash Reject
+curl -X POST http://localhost:8000/api/v1/human-tasks/{task_id}/reject \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"remark": "Documentation incomplete"}'
+```
+
+```bash Revert
+curl -X POST http://localhost:8000/api/v1/human-tasks/{task_id}/revert \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{"remark": "Please revise vendor details"}'
+```
+
+</CodeGroup>
+
+**Response**:
+
+```json
+{
+  "workflowInstanceId": "880e8400-e29b-41d4-a716-446655440000",
+  "stepInstanceId": "aa0e8400-e29b-41d4-a716-446655440000",
+  "actionType": "approve",
+  "workflowStatus": "completed",
+  "nextStepCode": null
+}
+```
+
+**Response fields**:
+
+- `workflowStatus`: Updated workflow status (`running`, `waiting`, `completed`, `rejected`)
+- `nextStepCode`: The step the workflow moved to (null if workflow ended)
+
+</Steps>
+
+## Approval Actions
+
+### Approve
+
+Move the workflow forward to the next step:
+
+```json
+{
+  "actionType": "approve",
+  "remark": "All requirements met"
+}
+```
+
+**Behavior**:
+
+1. Task marked as `completed`
+2. Step instance marked as `completed`
+3. Workflow action recorded in audit log
+4. Next transition resolved based on `approve` action type
+5. Workflow advances to next step
+6. If next step is terminal, workflow status becomes `completed`
+
+**Approval policy effects**:
+
+- **priority_chain**: First approval completes the step
+- **approve_any_one**: First approval completes the step
+- **approve_all**: All assigned users must approve; step completes when all have approved
+- **notify_all**: Policy-dependent behavior
+
+## Reject Actions
+
+### Reject
+
+Reject the workflow (typically moves to terminal step):
+
+```json
+{
+  "actionType": "reject",
+  "remark": "Vendor does not meet compliance requirements"
+}
+```
+
+**Behavior**:
+
+1. Task marked as `completed`
+2. Step instance marked as `rejected`
+3. Workflow action recorded
+4. Next transition resolved based on `reject` action type
+5. Typically moves to a terminal step or ends workflow
+6. Workflow status becomes `rejected`
+
+<Warning>
+Most workflows require a remark when rejecting. Check `remarkRequiredOnReject` in the step configuration.
+</Warning>
+
+## Revert Actions
+
+### Revert
+
+Send the workflow back to a previous step for corrections:
+
+```json
+{
+  "actionType": "revert",
+  "remark": "Please provide additional vendor certifications"
+}
+```
+
+**Behavior**:
+
+1. Task marked as `completed`
+2. Step instance marked as `reverted`
+3. Workflow action recorded
+4. Next transition resolved based on `revert` action type
+5. Workflow moves back to the target step
+6. Visit count increments for the revisited step
+7. New tasks created for the previous step's assignees
+
+**Loop safety**:
+
+If the step has `maxVisitsPerInstance: 3`, the workflow can visit that step up to 3 times. After that, attempting to revert will fail validation.
+
+## Remark Requirements
+
+Steps can require remarks for specific actions:
+
+- `remarkRequiredOnApprove`: Remark required when approving
+- `remarkRequiredOnReject`: Remark required when rejecting
+- `remarkRequiredOnRevert`: Remark required when reverting
+
+**Validation**:
+
+If a remark is required but not provided:
+
+```json
+{
+  "detail": "A remark is required for this action."
+}
+```
+
+**Remark storage**:
+
+Remarks are stored in the `workflow_action` table:
+
+```json
+{
+  "id": "ee0e8400-e29b-41d4-a716-446655440000",
+  "actionType": "reject",
+  "actorUserId": "770e8400-e29b-41d4-a716-446655440000",
+  "remarkText": "Vendor does not meet compliance requirements",
+  "createdAt": "2026-03-14T11:00:00Z"
+}
+```
+
+## Understanding Approval Policies
+
+### Priority Chain
+
+**Mode**: `priority_chain`
+
+**Behavior**:
+
+1. Only the highest-priority user receives an `open` task
+2. Other users receive `queued` tasks
+3. If the first user doesn't act within the escalation timeout, their task expires
+4. The next user's task becomes `open` and they're notified
+5. This continues until someone acts or max escalation count is reached
+
+**Example**:
+
+```
+User 1 (priority 1): open → expires after 24h
+User 2 (priority 2): queued → becomes open after 24h → approves
+```
+
+**Configuration**:
+
+```json
+{
+  "approvalMode": "priority_chain",
+  "priorityEscalationEnabled": true,
+  "escalationTimeoutSeconds": 86400,
+  "maxEscalationCount": 2
+}
+```
+
+### Approve Any One
+
+**Mode**: `approve_any_one`
+
+**Behavior**:
+
+1. All assigned users receive `open` tasks immediately
+2. First user to approve completes the step
+3. All other tasks are cancelled
+
+**Example**:
+
+```
+User 1: open → approves at 10:30
+User 2: open → cancelled
+User 3: open → cancelled
+```
+
+**Configuration**:
+
+```json
+{
+  "approvalMode": "approve_any_one",
+  "priorityEscalationEnabled": false
+}
+```
+
+### Approve All
+
+**Mode**: `approve_all`
+
+**Behavior**:
+
+1. All assigned users receive `open` tasks immediately
+2. Each user must approve
+3. Step completes only when all have approved
+4. If anyone rejects, the step is rejected
+
+**Example**:
+
+```
+User 1: open → approves at 10:30
+User 2: open → approves at 11:00
+User 3: open → approves at 11:30
+Step completes at 11:30
+```
+
+**Configuration**:
+
+```json
+{
+  "approvalMode": "approve_all",
+  "requiredApprovalsCount": 3,
+  "priorityEscalationEnabled": false
+}
+```
+
+### Notify All
+
+**Mode**: `notify_all`
+
+**Behavior**:
+
+All users are notified, but completion logic is custom or policy-dependent.
+
+## Escalation Handling
+
+In `priority_chain` mode, tasks automatically escalate:
+
+<Steps>
+
+### Step 1: Initial assignment
+
+```json
+{
+  "assignedUserId": "user-1",
+  "status": "open",
+  "escalationDueAt": "2026-03-15T10:30:00Z",
+  "sequenceNo": 1
+}
+```
+
+### Step 2: Escalation timeout reached
+
+A background worker (or queue consumer) checks for expired tasks:
+
+```sql
+SELECT * FROM human_task
+WHERE status = 'queued'
+  AND escalation_due_at <= NOW()
+```
+
+### Step 3: Next task activated
+
+The next queued task becomes `open`:
+
+```json
+{
+  "assignedUserId": "user-2",
+  "status": "open",
+  "escalationDueAt": "2026-03-16T10:30:00Z",
+  "sequenceNo": 2
+}
+```
+
+### Step 4: Notification sent
+
+The newly activated user receives a notification.
+
+</Steps>
+
+<Info>
+Escalation is handled by the `queue:release` worker. Run `pnpm queue:release` to process escalations.
+</Info>
+
+## Task Permissions
+
+Each task association defines permissions:
+
+```json
+{
+  "canApprove": true,
+  "canReject": true,
+  "canRevert": false
+}
+```
+
+If a user tries to perform an action they don't have permission for:
+
+```json
+{
+  "detail": "No matching transition exists for this action."
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+
+<Card title="Provide Meaningful Remarks" icon="comment">
+Always include clear, actionable remarks, especially for reject and revert actions.
+</Card>
+
+<Card title="Act Promptly" icon="clock">
+Respond to tasks before escalation timeouts to avoid delays.
+</Card>
+
+<Card title="Check Available Actions" icon="list-check">
+Always review `availableActions` before attempting an action.
+</Card>
+
+<Card title="Monitor Escalations" icon="arrow-up">
+In priority_chain mode, set up alerts for escalated tasks.
+</Card>
+
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+
+<Accordion title="HTTP 403: You are not assigned to this task">
+Verify:
+1. You are the assigned user
+2. Your user ID matches the task's `assignedUserId`
+3. Your email matches if assignment was by email
+</Accordion>
+
+<Accordion title="HTTP 422: A remark is required for this action">
+The step configuration requires a remark for this action type. Provide a non-empty `remark` field.
+</Accordion>
+
+<Accordion title="HTTP 409: Only open tasks can be actioned">
+The task status is not `open`. It may have been:
+- Already completed by another user
+- Cancelled because the workflow moved on
+- Expired due to escalation
+</Accordion>
+
+<Accordion title="HTTP 422: No matching transition exists for this action">
+No transition is defined for the action type you're trying to perform. Check the workflow definition's transitions.
+</Accordion>
+
+<Accordion title="Task completed but workflow didn't advance">
+In `approve_all` mode, the workflow waits for all users to approve. Check other open tasks.
+</Accordion>
+
+</AccordionGroup>
+
+## Example: Complete Task Flow
+
+<Steps>
+
+### Step 1: Workflow starts
+
+Workflow instance created, moves to `manager_approval` step.
+
+### Step 2: Tasks created
+
+Two tasks created:
+- User 1 (priority 1): `status: open`
+- User 2 (priority 2): `status: queued`
+
+### Step 3: User 1 notified
+
+User 1 receives in-app notification:
+
+```
+Title: Approval needed: Manager Approval
+Body: Vendor Onboarding is waiting for your action.
+```
+
+### Step 4: User 1 acts
+
+User 1 approves:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/human-tasks/{task_id}/approve \
+  -H "Authorization: Bearer USER_1_TOKEN" \
+  -d '{"remark": "Approved after review"}'
+```
+
+### Step 5: Workflow advances
+
+- User 1's task: `status: completed`
+- User 2's task: `status: cancelled`
+- Step instance: `status: completed`
+- Workflow moves to next step
+
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Notifications" icon="bell" href="/guides/notifications">
+Learn how to view and manage in-app notifications
+</Card>
+
+<Card title="Managing Instances" icon="chart-line" href="/guides/managing-instances">
+Monitor workflow instance progress and history
+</Card>
+
+</CardGroup>

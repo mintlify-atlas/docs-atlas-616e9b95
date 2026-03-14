@@ -1,0 +1,153 @@
+---
+title: Architecture Overview
+description: High-level architecture of the Workflow Engine Platform
+---
+
+The Workflow Engine Platform is an async workflow engine with human-in-the-loop processing that enables long-running business approval flows.
+
+## Design Principles
+
+### Separation of Concerns
+
+The architecture strictly separates **static definition data** from **runtime execution data**:
+
+- **Static side**: Workflow definitions, versions, steps, transitions, approval policies, and notification templates
+- **Runtime side**: Workflow instances, step instances, human tasks, actions, notifications, and execution state
+
+This split is critical because definitions should be editable and versioned without corrupting in-flight workflows.
+
+### Database as Source of Truth
+
+RabbitMQ is **not** the source of truth—it is only a delivery mechanism. The PostgreSQL database always contains:
+
+- Current workflow state and step state
+- All pending work items
+- All emitted but unsent notifications (via outbox pattern)
+- Currently active escalation stages
+- All completed actions (full audit trail)
+- Subworkflow linkage
+
+## Key Components
+
+### Backend (FastAPI)
+
+The Python backend provides:
+
+- RESTful API endpoints for workflow definitions and runtime operations
+- Workflow execution engine with transition resolution
+- Human task creation and assignee resolution
+- Better Auth JWT verification
+- Outbox pattern for reliable message delivery
+- Background workers for notifications and escalations
+
+Core modules:
+
+```
+apps/api/src/api/
+├── main.py              # FastAPI app entry point
+├── workflows.py         # Workflow definition endpoints
+├── runtime.py           # Runtime execution endpoints
+├── auth.py              # JWT verification
+├── db.py                # Database connection
+└── config.py            # Configuration
+```
+
+### Frontend (Next.js)
+
+The Next.js frontend provides:
+
+- Better Auth email/password authentication
+- Visual workflow builder using React Flow
+- Admin screens for workflow management
+- Runtime inbox for human tasks
+- Workflow instance timeline and history
+
+### Message Queue (RabbitMQ)
+
+RabbitMQ handles asynchronous work:
+
+- In-app notification delivery
+- Task reminders and escalations
+- Automatic system step execution
+- Parent workflow resumption after child completion
+
+Recommended queues:
+
+- `workflow.engine` - Core workflow operations
+- `workflow.notifications` - Notification delivery
+- `workflow.reminders` - Task reminders
+- `workflow.subworkflow` - Subworkflow coordination
+- `workflow.dead_letter` - Failed message handling
+
+### Database (PostgreSQL)
+
+PostgreSQL stores all workflow state, using:
+
+- Static tables for workflow definitions and versions
+- Runtime tables for instances and execution state
+- Optimistic locking for concurrency control
+- JSONB for flexible schema storage
+
+## Workflow Execution Flow
+
+1. **Start**: A workflow instance is created from a published version
+2. **Enter Step**: Engine creates a step instance
+3. **Execute**:
+   - **Automatic steps**: Worker executes and advances immediately
+   - **Human steps**: Workflow pauses, tasks created, notifications sent
+   - **Subworkflow steps**: Child workflow starts, parent pauses
+4. **Action**: User approves/rejects/reverts or system completes
+5. **Transition**: Engine resolves matching transition and advances
+6. **Repeat**: Continue until terminal step reached
+
+## Concurrency and Safety
+
+Core safety rules:
+
+- Every state change happens inside database transactions
+- Optimistic locking prevents concurrent updates
+- Idempotency keys protect against duplicate actions
+- Outbox pattern ensures reliable message delivery
+- Only one active step instance at a time (no parallelism)
+
+## Validation and Graph Safety
+
+Before publishing, workflow definitions are validated:
+
+- Exactly one start node required
+- At least one terminal node required
+- Every step reachable from start
+- All transition targets exist
+- No unconditional self-loops
+- Cycles require `maxVisitsPerInstance` guard
+- Subworkflow mappings point to valid workflows
+
+See `apps/api/src/api/workflows.py:72` for complete validation logic.
+
+## Authentication Flow
+
+1. User signs in with Better Auth (email/password) in Next.js
+2. Next.js stores Better Auth session cookie
+3. Frontend requests Better Auth JWT token for API calls
+4. Frontend sends `Authorization: Bearer <token>` to FastAPI
+5. FastAPI verifies JWT using Better Auth JWKS
+6. FastAPI resolves user ID and applies workflow authorization
+
+This clean split keeps authentication in TypeScript (Better Auth native) and workflow execution in Python (FastAPI).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Database Schema" icon="database" href="./database-schema">
+    Complete schema with all tables and columns
+  </Card>
+  <Card title="Execution Model" icon="gears" href="./execution-model">
+    Step-by-step workflow execution flow
+  </Card>
+  <Card title="Static vs Runtime" icon="layer-group" href="./static-vs-runtime">
+    Separation between definitions and execution
+  </Card>
+  <Card title="Technology Stack" icon="layer-group" href="./stack">
+    Technologies and frameworks used
+  </Card>
+</CardGroup>

@@ -1,0 +1,454 @@
+---
+title: Technology Stack
+description: Technologies and frameworks used in the Workflow Engine Platform
+---
+
+The Workflow Engine Platform uses a modern, production-ready technology stack optimized for async workflow execution with human-in-the-loop processing.
+
+## Backend Stack
+
+### FastAPI (Python)
+
+**Version**: Latest stable  
+**Purpose**: REST API server and workflow execution engine
+
+**Why FastAPI?**
+- Async/await native support for concurrent operations
+- Automatic OpenAPI documentation
+- Type hints and Pydantic integration
+- High performance (comparable to Node.js and Go)
+- Easy JWT validation and dependency injection
+
+**Key Usage**:
+```python
+from fastapi import APIRouter, Depends, HTTPException
+from api.auth import get_current_user, AuthenticatedUser
+
+router = APIRouter(prefix="/api/v1/workflow-definitions", tags=["workflow-definitions"])
+
+@router.post("", response_model=WorkflowDefinitionCreateResponse)
+def create_workflow_definition(
+    payload: WorkflowDefinitionCreate,
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    # Validates JWT, extracts user, enforces auth
+    ...
+```
+
+See `apps/api/src/api/main.py` for the FastAPI app configuration.
+
+### PostgreSQL
+
+**Version**: 14+  
+**Deployment**: Neon (managed PostgreSQL)
+
+**Why PostgreSQL?**
+- JSONB support for flexible schema storage
+- Strong transactional guarantees (ACID)
+- Excellent performance for both OLTP and reporting
+- Native UUID support
+- Robust indexing and query optimization
+
+**Key Features Used**:
+- **JSONB columns**: `graph_json`, `builder_layout`, `context_data`, `payload`
+- **Partial indexes**: For status-based queries
+- **Foreign keys**: Enforcing referential integrity
+- **Row-level locking**: Optimistic concurrency control
+- **Transactions**: All state changes atomic
+
+**Connection**:
+```python
+import psycopg
+from psycopg.rows import dict_row
+
+def get_db_connection():
+    return psycopg.connect(
+        settings.DATABASE_URL,
+        row_factory=dict_row,
+        autocommit=False  # Explicit transactions
+    )
+```
+
+See `apps/api/src/api/db.py` for database connection handling.
+
+### Psycopg 3
+
+**Purpose**: PostgreSQL driver for Python
+
+**Why Psycopg 3?**
+- Native async support
+- Better connection pooling
+- Type adapters for JSON, UUID, etc.
+- Dict row factory for easy result handling
+
+### Pydantic
+
+**Purpose**: Request/response validation and serialization
+
+**Example**:
+```python
+from pydantic import BaseModel, Field
+
+class WorkflowInstanceStartRequest(BaseModel):
+    workflowDefinitionId: str | None = None
+    workflowKey: str | None = None
+    businessKey: str | None = None
+    inputData: dict[str, Any] = Field(default_factory=dict)
+    contextData: dict[str, Any] = Field(default_factory=dict)
+```
+
+See `apps/api/src/api/workflow_schemas.py` and `apps/api/src/api/runtime_schemas.py`.
+
+### uv
+
+**Purpose**: Python package manager and task runner
+
+**Why uv?**
+- Extremely fast (Rust-based)
+- Drop-in replacement for pip/pipenv/poetry
+- Built-in virtual environment management
+- Dependency resolution
+
+**Usage**:
+```bash
+# Run FastAPI server
+uv run --project apps/api uvicorn api.main:app --reload
+
+# Run database bootstrap
+uv run --project apps/api python apps/api/scripts/bootstrap_neon.py
+
+# Run outbox publisher worker
+uv run --project apps/api python apps/api/scripts/publish_outbox.py
+```
+
+See `package.json` scripts for common commands.
+
+## Frontend Stack
+
+### Next.js 15
+
+**Purpose**: React framework for the web application
+
+**Why Next.js?**
+- App Router with Server Components
+- Built-in API routes for Better Auth
+- TypeScript support
+- Optimized production builds
+- File-based routing
+
+**Project Structure**:
+```
+apps/web/
+├── app/              # App Router pages
+├── components/       # React components
+├── lib/              # Utilities and auth
+└── public/           # Static assets
+```
+
+### shadcn/ui
+
+**Purpose**: UI component library
+
+**Why shadcn/ui?**
+- Copy-paste components (not a dependency)
+- Built on Radix UI primitives
+- Tailwind CSS styling
+- Fully customizable
+- Accessible by default
+
+**Initialization**:
+```bash
+pnpm dlx shadcn@latest init --preset ac2FTn --template next
+```
+
+Components used: Button, Card, Dialog, Form, Select, Table, Tabs, etc.
+
+### React Flow
+
+**Purpose**: Visual workflow builder
+
+**Why React Flow?**
+- Node-based graph editor
+- Drag-and-drop support
+- Customizable nodes and edges
+- Mini-map and controls
+- Layout algorithms
+
+**Example**:
+```typescript
+import ReactFlow, { Node, Edge } from 'reactflow';
+
+const nodes: Node[] = [
+  { id: 'start', position: { x: 0, y: 0 }, data: { label: 'Start' } },
+  { id: 'approve', position: { x: 200, y: 0 }, data: { label: 'Manager Approval' } },
+];
+
+const edges: Edge[] = [
+  { id: 'e1', source: 'start', target: 'approve', label: 'Submit' },
+];
+
+<ReactFlow nodes={nodes} edges={edges} />
+```
+
+See workflow builder implementation in `apps/web/`.
+
+### Better Auth
+
+**Purpose**: Authentication library for Next.js
+
+**Why Better Auth?**
+- TypeScript-first
+- Email/password support
+- JWT token issuance
+- Session management
+- Plugin system
+
+**Configuration**:
+```typescript
+import { betterAuth } from "better-auth";
+
+export const auth = betterAuth({
+  database: {
+    provider: "postgres",
+    url: process.env.DATABASE_URL,
+  },
+  emailAndPassword: {
+    enabled: true,
+  },
+  jwt: {
+    enabled: true,
+  },
+});
+```
+
+See `apps/web/lib/auth.ts` for full configuration.
+
+### TanStack Query
+
+**Purpose**: Data fetching and caching
+
+**Why TanStack Query?**
+- Automatic caching and refetching
+- Optimistic updates
+- Loading/error states
+- Request deduplication
+
+**Example**:
+```typescript
+import { useQuery } from '@tanstack/react-query';
+
+function WorkflowList() {
+  const { data, isLoading } = useQuery({
+    queryKey: ['workflows'],
+    queryFn: () => fetch('/api/v1/workflow-definitions').then(r => r.json()),
+  });
+  
+  if (isLoading) return <div>Loading...</div>;
+  return <div>{data.items.map(...)}</div>;
+}
+```
+
+### pnpm
+
+**Version**: 10.x  
+**Purpose**: Node.js package manager
+
+**Why pnpm?**
+- Fast and disk-efficient
+- Strict dependency resolution
+- Monorepo support
+- Compatible with npm/yarn
+
+**Usage**:
+```bash
+# Install dependencies
+pnpm install
+
+# Start Next.js dev server
+pnpm dev:web
+
+# Build for production
+pnpm build:web
+```
+
+## Message Queue
+
+### RabbitMQ
+
+**Version**: 3.13  
+**Purpose**: Async message delivery
+
+**Why RabbitMQ?**
+- Proven reliability
+- Flexible routing
+- Message persistence
+- Dead-letter queues
+- Management UI
+
+**Deployment**:
+```yaml
+# infra/docker-compose.yml
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    ports:
+      - "5672:5672"    # AMQP
+      - "15672:15672"  # Management UI
+    environment:
+      RABBITMQ_DEFAULT_USER: workflow
+      RABBITMQ_DEFAULT_PASS: workflow
+```
+
+**Queues**:
+- `workflow.engine` - Workflow execution events
+- `workflow.notifications` - Notification delivery
+- `workflow.reminders` - Task reminder jobs
+- `workflow.subworkflow` - Subworkflow coordination
+- `workflow.dead_letter` - Failed messages
+
+See [RabbitMQ Architecture](./rabbitmq) for details.
+
+## Development Tools
+
+### Git
+
+**Purpose**: Version control
+
+Monorepo structure:
+```
+.
+├── apps/
+│   ├── api/          # FastAPI backend
+│   └── web/          # Next.js frontend
+├── infra/            # Docker compose
+└── package.json      # Root workspace config
+```
+
+### Docker Compose
+
+**Purpose**: Local RabbitMQ deployment
+
+**Usage**:
+```bash
+# Start RabbitMQ
+docker compose -f infra/docker-compose.yml up -d
+
+# Stop RabbitMQ
+docker compose -f infra/docker-compose.yml down
+
+# View logs
+docker compose -f infra/docker-compose.yml logs -f
+```
+
+### VS Code
+
+**Recommended Extensions**:
+- Python
+- Pylance
+- ESLint
+- Prettier
+- Tailwind CSS IntelliSense
+
+## Deployment Stack
+
+### Database
+
+**Neon (PostgreSQL)**  
+- Managed PostgreSQL with branching
+- Automatic backups
+- Connection pooling
+- Serverless driver support
+
+**Environment Variables**:
+```env
+# apps/web/.env.local
+DATABASE_URL=postgresql://...
+
+# apps/api/.env
+WORKFLOW_DATABASE_URL=postgresql://...
+```
+
+Both apps point to the same Neon database.
+
+### Message Queue
+
+**Local Development**: Docker Compose  
+**Production**: Managed RabbitMQ (CloudAMQP, AWS MQ, etc.)
+
+### API Server
+
+**Options**:
+- Docker container on any cloud
+- Serverless (with cold start trade-offs)
+- Traditional VPS/EC2
+
+**Command**:
+```bash
+uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+### Web Application
+
+**Recommended**: Vercel (Next.js native)  
+**Alternatives**: Netlify, AWS Amplify, Cloudflare Pages
+
+**Build**:
+```bash
+pnpm build:web
+# Output: apps/web/.next/
+```
+
+## Package Management Summary
+
+| Tool | Purpose | Project |
+|------|---------|----------|
+| `uv` | Python packages and task runner | Backend (`apps/api`) |
+| `pnpm` | Node.js packages | Frontend (`apps/web`) |
+| `pip` | ❌ Not used (replaced by `uv`) | - |
+| `npm` | ❌ Not used (replaced by `pnpm`) | - |
+
+## Architecture Diagram
+
+```
+┌─────────────────┐
+│   Next.js Web   │
+│  (Port 3000)    │
+│                 │
+│  - React Flow   │
+│  - Better Auth  │
+│  - shadcn/ui    │
+└────────┬────────┘
+         │ HTTP + JWT
+         v
+┌─────────────────┐      ┌──────────────┐
+│  FastAPI API    │◄────►│  PostgreSQL  │
+│  (Port 8000)    │      │   (Neon)     │
+│                 │      └──────────────┘
+│  - Workflow     │
+│    Engine       │
+│  - Auth JWT     │      ┌──────────────┐
+│    Validation   │◄────►│  RabbitMQ    │
+└─────────────────┘      │  (Docker)    │
+         │               └──────────────┘
+         │ Workers
+         v
+┌─────────────────┐
+│  Background     │
+│  Workers        │
+│                 │
+│  - Outbox       │
+│  - Reminders    │
+│  - Escalations  │
+└─────────────────┘
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Deployment Guide" icon="rocket" href="./deployment">
+    How to deploy to production
+  </Card>
+  <Card title="RabbitMQ Architecture" icon="message" href="./rabbitmq">
+    Message queue usage and patterns
+  </Card>
+</CardGroup>

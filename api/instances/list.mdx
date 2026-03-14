@@ -1,0 +1,169 @@
+---
+title: "List Workflow Instances"
+description: "Retrieve all workflow instances in the system"
+---
+
+Retrieve a list of all workflow instances in the system, ordered by start time (most recent first). Returns summary information for each instance including current status, step, and execution metadata.
+
+## Endpoint
+
+```
+GET /api/v1/workflow-instances
+```
+
+## Authentication
+
+<Note>
+  This endpoint requires authentication. Include a valid Bearer token in the Authorization header.
+</Note>
+
+## Request
+
+No request parameters are required for this endpoint.
+
+### Example Request
+
+```bash
+curl -X GET https://api.example.com/api/v1/workflow-instances \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+## Response
+
+Returns an array of workflow instance summaries.
+
+### Response Schema
+
+<ResponseField name="items" type="array" required>
+  Array of workflow instance summaries
+  
+  <Expandable title="WorkflowInstanceSummary object">
+    <ResponseField name="id" type="UUID" required>
+      Unique identifier for the workflow instance
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionId" type="UUID" required>
+      ID of the workflow definition used to create this instance
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionKey" type="string" required>
+      Unique key identifier for the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionName" type="string" required>
+      Human-readable name of the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="workflowVersionId" type="UUID" required>
+      ID of the specific workflow version being executed
+    </ResponseField>
+    
+    <ResponseField name="businessKey" type="string">
+      Optional business identifier for the workflow instance (e.g., order number, ticket ID)
+    </ResponseField>
+    
+    <ResponseField name="runNumber" type="integer" required>
+      Sequential run number for this business key (starts at 1)
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Current status of the workflow instance. Possible values:
+      - `running` - Workflow is actively executing
+      - `waiting` - Waiting for human task or external event
+      - `paused` - Paused for subworkflow execution
+      - `completed` - Successfully completed
+      - `rejected` - Rejected during execution
+      - `failed` - Failed due to error
+      - `cancelled` - Cancelled by user or system
+    </ResponseField>
+    
+    <ResponseField name="currentStepCode" type="string">
+      Code identifier of the current step (null if completed)
+    </ResponseField>
+    
+    <ResponseField name="currentStepLabel" type="string">
+      Human-readable label of the current step (null if completed)
+    </ResponseField>
+    
+    <ResponseField name="startedBy" type="string">
+      User ID of the user who started the workflow
+    </ResponseField>
+    
+    <ResponseField name="startedAt" type="string" required>
+      ISO 8601 timestamp when the workflow was started
+    </ResponseField>
+    
+    <ResponseField name="completedAt" type="string">
+      ISO 8601 timestamp when the workflow completed (null if still running)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "items": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "workflowDefinitionId": "660e8400-e29b-41d4-a716-446655440001",
+      "workflowDefinitionKey": "expense-approval",
+      "workflowDefinitionName": "Expense Approval Workflow",
+      "workflowVersionId": "770e8400-e29b-41d4-a716-446655440002",
+      "businessKey": "EXP-2024-001",
+      "runNumber": 1,
+      "status": "waiting",
+      "currentStepCode": "manager_review",
+      "currentStepLabel": "Manager Review",
+      "startedBy": "user_123",
+      "startedAt": "2024-01-15T10:30:00Z",
+      "completedAt": null
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440003",
+      "workflowDefinitionId": "660e8400-e29b-41d4-a716-446655440001",
+      "workflowDefinitionKey": "expense-approval",
+      "workflowDefinitionName": "Expense Approval Workflow",
+      "workflowVersionId": "770e8400-e29b-41d4-a716-446655440002",
+      "businessKey": "EXP-2024-002",
+      "runNumber": 1,
+      "status": "completed",
+      "currentStepCode": null,
+      "currentStepLabel": null,
+      "startedBy": "user_456",
+      "startedAt": "2024-01-14T14:20:00Z",
+      "completedAt": "2024-01-14T16:45:00Z"
+    }
+  ]
+}
+```
+
+## Error Responses
+
+<ResponseField name="401 Unauthorized">
+  Returned when authentication token is missing or invalid.
+  
+  ```json
+  {
+    "detail": "Not authenticated"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error">
+  Returned when an unexpected server error occurs.
+  
+  ```json
+  {
+    "detail": "Internal server error"
+  }
+  ```
+</ResponseField>
+
+## Use Cases
+
+- Display dashboard of all active workflows
+- Monitor workflow execution status across the system
+- Filter and search for specific workflow instances
+- Track workflow completion rates and timelines

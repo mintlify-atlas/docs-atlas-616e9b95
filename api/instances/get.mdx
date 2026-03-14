@@ -1,0 +1,323 @@
+---
+title: "Get Workflow Instance"
+description: "Retrieve detailed information about a specific workflow instance"
+---
+
+Retrieve comprehensive details about a specific workflow instance, including all step history, actions taken, workflow data (input/context/output), and the workflow graph structure.
+
+## Endpoint
+
+```
+GET /api/v1/workflow-instances/{workflow_instance_id}
+```
+
+## Authentication
+
+<Note>
+  This endpoint requires authentication. Include a valid Bearer token in the Authorization header.
+</Note>
+
+## Path Parameters
+
+<ParamField path="workflow_instance_id" type="UUID" required>
+  The unique identifier of the workflow instance to retrieve
+</ParamField>
+
+## Request
+
+### Example Request
+
+```bash
+curl -X GET https://api.example.com/api/v1/workflow-instances/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json"
+```
+
+## Response
+
+Returns detailed information about the workflow instance.
+
+### Response Schema
+
+<ResponseField name="item" type="object" required>
+  Detailed workflow instance information
+  
+  <Expandable title="WorkflowInstanceDetail object">
+    <ResponseField name="id" type="UUID" required>
+      Unique identifier for the workflow instance
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionId" type="UUID" required>
+      ID of the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionKey" type="string" required>
+      Unique key identifier for the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionName" type="string" required>
+      Human-readable name of the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="workflowVersionId" type="UUID" required>
+      ID of the specific workflow version being executed
+    </ResponseField>
+    
+    <ResponseField name="businessKey" type="string">
+      Optional business identifier for the workflow instance
+    </ResponseField>
+    
+    <ResponseField name="runNumber" type="integer" required>
+      Sequential run number for this business key
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Current workflow status: `running`, `waiting`, `paused`, `completed`, `rejected`, `failed`, `cancelled`
+    </ResponseField>
+    
+    <ResponseField name="currentStepCode" type="string">
+      Code of the current step (null if completed)
+    </ResponseField>
+    
+    <ResponseField name="currentStepLabel" type="string">
+      Label of the current step (null if completed)
+    </ResponseField>
+    
+    <ResponseField name="startedBy" type="string">
+      User ID who started the workflow
+    </ResponseField>
+    
+    <ResponseField name="startedAt" type="string" required>
+      ISO 8601 timestamp when workflow started
+    </ResponseField>
+    
+    <ResponseField name="completedAt" type="string">
+      ISO 8601 timestamp when workflow completed (null if running)
+    </ResponseField>
+    
+    <ResponseField name="inputData" type="object" required>
+      Input data provided when the workflow was started
+    </ResponseField>
+    
+    <ResponseField name="contextData" type="object" required>
+      Current context data accumulated during workflow execution
+    </ResponseField>
+    
+    <ResponseField name="outputData" type="object" required>
+      Final output data (populated when workflow completes)
+    </ResponseField>
+    
+    <ResponseField name="graphJson" type="object" required>
+      Workflow graph structure definition
+    </ResponseField>
+    
+    <ResponseField name="builderLayout" type="object" required>
+      Visual layout information for workflow builder
+    </ResponseField>
+    
+    <ResponseField name="steps" type="array" required>
+      Array of all step instances executed in this workflow
+      
+      <Expandable title="Step Instance object">
+        <ResponseField name="id" type="UUID" required>
+          Unique identifier for the step instance
+        </ResponseField>
+        
+        <ResponseField name="stepCode" type="string" required>
+          Code identifier of the step definition
+        </ResponseField>
+        
+        <ResponseField name="stepLabel" type="string" required>
+          Human-readable label of the step
+        </ResponseField>
+        
+        <ResponseField name="stepType" type="string" required>
+          Type of step: `start`, `human_task`, `subworkflow`, `end`, etc.
+        </ResponseField>
+        
+        <ResponseField name="status" type="string" required>
+          Step status: `pending`, `active`, `waiting`, `completed`, `rejected`, `reverted`, `failed`, `cancelled`
+        </ResponseField>
+        
+        <ResponseField name="visitCount" type="integer" required>
+          Number of times this step has been visited (for loops)
+        </ResponseField>
+        
+        <ResponseField name="enteredAt" type="string" required>
+          ISO 8601 timestamp when step was entered
+        </ResponseField>
+        
+        <ResponseField name="completedAt" type="string">
+          ISO 8601 timestamp when step completed
+        </ResponseField>
+        
+        <ResponseField name="waitingSince" type="string">
+          ISO 8601 timestamp when step started waiting
+        </ResponseField>
+        
+        <ResponseField name="resultAction" type="string">
+          Action that completed the step: `approve`, `reject`, `revert`, `custom`
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="actions" type="array" required>
+      Array of all actions performed on this workflow
+      
+      <Expandable title="Workflow Action object">
+        <ResponseField name="id" type="UUID" required>
+          Unique identifier for the action
+        </ResponseField>
+        
+        <ResponseField name="actionType" type="string" required>
+          Type of action: `start`, `approve`, `reject`, `revert`, `custom`
+        </ResponseField>
+        
+        <ResponseField name="actionCode" type="string">
+          Code for custom actions (null for standard actions)
+        </ResponseField>
+        
+        <ResponseField name="actorUserId" type="string">
+          User ID who performed the action
+        </ResponseField>
+        
+        <ResponseField name="actorType" type="string" required>
+          Type of actor: `user`, `system`, `api`
+        </ResponseField>
+        
+        <ResponseField name="remarkText" type="string">
+          Optional comment/remark provided with the action
+        </ResponseField>
+        
+        <ResponseField name="payload" type="object" required>
+          Additional data associated with the action
+        </ResponseField>
+        
+        <ResponseField name="createdAt" type="string" required>
+          ISO 8601 timestamp when action was recorded
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "item": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "workflowDefinitionId": "660e8400-e29b-41d4-a716-446655440001",
+    "workflowDefinitionKey": "expense-approval",
+    "workflowDefinitionName": "Expense Approval Workflow",
+    "workflowVersionId": "770e8400-e29b-41d4-a716-446655440002",
+    "businessKey": "EXP-2024-001",
+    "runNumber": 1,
+    "status": "waiting",
+    "currentStepCode": "manager_review",
+    "currentStepLabel": "Manager Review",
+    "startedBy": "user_123",
+    "startedAt": "2024-01-15T10:30:00Z",
+    "completedAt": null,
+    "inputData": {
+      "expenseAmount": 1500.00,
+      "category": "travel",
+      "description": "Flight to conference"
+    },
+    "contextData": {
+      "expenseAmount": 1500.00,
+      "category": "travel",
+      "description": "Flight to conference",
+      "submittedAt": "2024-01-15T10:30:00Z"
+    },
+    "outputData": {},
+    "graphJson": {
+      "nodes": [],
+      "edges": []
+    },
+    "builderLayout": {},
+    "steps": [
+      {
+        "id": "880e8400-e29b-41d4-a716-446655440010",
+        "stepCode": "start",
+        "stepLabel": "Start",
+        "stepType": "start",
+        "status": "completed",
+        "visitCount": 1,
+        "enteredAt": "2024-01-15T10:30:00Z",
+        "completedAt": "2024-01-15T10:30:01Z",
+        "waitingSince": null,
+        "resultAction": "approve"
+      },
+      {
+        "id": "880e8400-e29b-41d4-a716-446655440011",
+        "stepCode": "manager_review",
+        "stepLabel": "Manager Review",
+        "stepType": "human_task",
+        "status": "waiting",
+        "visitCount": 1,
+        "enteredAt": "2024-01-15T10:30:01Z",
+        "completedAt": null,
+        "waitingSince": "2024-01-15T10:30:01Z",
+        "resultAction": null
+      }
+    ],
+    "actions": [
+      {
+        "id": "990e8400-e29b-41d4-a716-446655440020",
+        "actionType": "start",
+        "actionCode": null,
+        "actorUserId": "user_123",
+        "actorType": "user",
+        "remarkText": null,
+        "payload": {
+          "workflowDefinitionKey": "expense-approval",
+          "businessKey": "EXP-2024-001"
+        },
+        "createdAt": "2024-01-15T10:30:00Z"
+      }
+    ]
+  }
+}
+```
+
+## Error Responses
+
+<ResponseField name="401 Unauthorized">
+  Authentication token is missing or invalid.
+  
+  ```json
+  {
+    "detail": "Not authenticated"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="404 Not Found">
+  Workflow instance with the specified ID does not exist.
+  
+  ```json
+  {
+    "detail": "Workflow instance not found."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error">
+  An unexpected server error occurred.
+  
+  ```json
+  {
+    "detail": "Internal server error"
+  }
+  ```
+</ResponseField>
+
+## Use Cases
+
+- View detailed workflow execution history
+- Debug workflow execution issues
+- Audit workflow progress and actions
+- Display workflow timeline to end users
+- Export workflow execution data
+- Analyze step completion times and patterns

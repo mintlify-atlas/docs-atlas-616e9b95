@@ -1,0 +1,140 @@
+---
+title: "Clone Workflow Definition"
+description: "Create a copy of an existing workflow definition with a new key and name"
+---
+
+## Overview
+
+Clone an existing workflow definition to create a new workflow with the same structure. The cloned workflow inherits all steps, transitions, and configuration from the source workflow but receives a new unique key and name.
+
+## Endpoint
+
+```
+POST /api/v1/workflow-definitions/{definition_id}/clone
+```
+
+## Authentication
+
+This endpoint requires authentication. Include a valid authentication token in your request.
+
+## Path Parameters
+
+<ParamField path="definition_id" type="string (UUID)" required>
+  The unique identifier of the workflow definition to clone
+</ParamField>
+
+## Request Body
+
+<ParamField body="key" type="string" required>
+  Unique key for the new cloned workflow (must be globally unique and not already exist)
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Display name for the new cloned workflow
+</ParamField>
+
+<ParamField body="description" type="string | null" default="null">
+  Description for the new cloned workflow. If not provided, the description from the source workflow will be used.
+</ParamField>
+
+## Response
+
+Returns the newly created cloned workflow definition with full details. Status code: 201 Created.
+
+<ResponseField name="item" type="object" required>
+  The cloned workflow definition (same structure as GET /api/v1/workflow-definitions/{definition_id})
+</ResponseField>
+
+## Cloning Behavior
+
+When you clone a workflow definition:
+
+1. **New workflow is created**: A new workflow definition is created with the provided key and name
+2. **Latest version is cloned**: The latest version of the source workflow is used as the template
+3. **All structure is preserved**: Steps, transitions, assignment policies, associations, and all other configuration are copied exactly
+4. **Draft status**: The cloned workflow starts in "draft" status
+5. **New IDs**: All IDs (workflow ID, step IDs, transition IDs) are newly generated
+6. **Version 1**: The cloned workflow starts at version 1
+
+## Example Request
+
+```bash
+curl -X POST https://api.example.com/api/v1/workflow-definitions/550e8400-e29b-41d4-a716-446655440000/clone \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "expense-approval-copy",
+    "name": "Expense Approval Workflow (Copy)",
+    "description": "Cloned from the original expense approval workflow for customization"
+  }'
+```
+
+## Example Response
+
+```json
+{
+  "item": {
+    "id": "880e8400-e29b-41d4-a716-446655440010",
+    "key": "expense-approval-copy",
+    "name": "Expense Approval Workflow (Copy)",
+    "description": "Cloned from the original expense approval workflow for customization",
+    "status": "draft",
+    "latestVersionId": "990e8400-e29b-41d4-a716-446655440011",
+    "latestVersionNo": 1,
+    "graphJson": {
+      "workflow": {
+        "key": "expense-approval-copy",
+        "name": "Expense Approval Workflow (Copy)",
+        "description": "Cloned from the original expense approval workflow for customization"
+      },
+      "steps": [...],
+      "transitions": [...]
+    },
+    "builderLayout": {
+      "nodes": [...],
+      "edges": [...],
+      "viewport": {"x": 0, "y": 0, "zoom": 1}
+    },
+    "steps": [...],
+    "transitions": [...]
+  }
+}
+```
+
+## Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication token is missing or invalid
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  Source workflow definition not found
+  
+  ```json
+  {
+    "detail": "Workflow definition not found."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="409" type="Conflict">
+  Workflow key already exists
+  
+  ```json
+  {
+    "detail": "Workflow key already exists."
+  }
+  ```
+</ResponseField>
+
+<Note>
+The cloned workflow is created in "draft" status. You can modify it and then publish when ready.
+</Note>
+
+<Note>
+If you don't provide a description, the cloned workflow will inherit the description from the source workflow.
+</Note>
+
+<Note>
+Cloning is useful for creating workflow templates or creating variations of existing workflows without starting from scratch.
+</Note>

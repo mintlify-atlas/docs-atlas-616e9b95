@@ -1,0 +1,558 @@
+---
+title: RabbitMQ Integration
+description: RabbitMQ usage, outbox pattern, queues, and message types in the Workflow Engine Platform
+---
+
+The Workflow Engine Platform uses RabbitMQ for asynchronous message delivery, following the **outbox pattern** to ensure reliability.
+
+## Core Principle: Database is Source of Truth
+
+<Warning>
+  RabbitMQ is **not** the source of truth—it is only a delivery mechanism.
+</Warning>
+
+All critical state is stored in PostgreSQL:
+- Current workflow state
+- Pending human tasks
+- Notification delivery status
+- Action history
+
+RabbitMQ handles:
+- Async job distribution
+- Notification delivery
+- Background task processing
+
+## The Outbox Pattern
+
+The outbox pattern ensures that messages are never lost, even if RabbitMQ is temporarily unavailable.
+
+### How It Works
+
+1. **Transaction commits state + outbox event** in a single atomic operation
+2. **Outbox worker polls** `outbox_event` table
+3. **Worker publishes** to RabbitMQ
+4. **Worker marks event as published** in database
+5. **Consumer processes** message from queue
+
+### Outbox Table Schema
+
+See `docs/async-workflow-engine-plan.md:501` for complete schema.
+
+```sql
+CREATE TABLE outbox_event (
+    id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    aggregate_type text NOT NULL,  -- 'workflow_instance', 'human_task', 'notification'
+    aggregate_id uuid NOT NULL,
+    event_type text NOT NULL,      -- 'task.assigned', 'workflow.completed', etc.
+    payload jsonb NOT NULL,
+    status text NOT NULL DEFAULT 'pending',  -- 'pending', 'published', 'failed'
+    available_at timestamptz NOT NULL DEFAULT now(),
+    published_at timestamptz,
+    retry_count int NOT NULL DEFAULT 0,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX idx_outbox_pending ON outbox_event(status, available_at) 
+WHERE status = 'pending';
+```
+
+### Writing to Outbox
+
+From `apps/api/src/api/runtime.py:42`:
+
+```python
+def _record_outbox(
+    cursor,
+    aggregate_type: str,
+    aggregate_id,
+    event_type: str,
+    payload: dict[str, Any],
+) -> None:
+    cursor.execute(
+        """
+        INSERT INTO outbox_event (aggregate_type, aggregate_id, event_type, payload)
+        VALUES (%s, %s, %s, %s)
+        """,
+        (aggregate_type, aggregate_id, event_type, Json(payload)),
+    )
+```
+
+Example usage when creating a task:
+
+```python
+# Create notification in same transaction
+_create_notification(cursor, user_id, workflow_instance_id, ...)
+
+# Record outbox event
+_record_outbox(
+    cursor,
+    "human_task",
+    task_id,
+    "human_task.assigned",
+    {
+        "workflowInstanceId": str(workflow_instance_id),
+        "stepInstanceId": str(step_instance_id),
+        "assignedUserId": user_id,
+    },
+)
+
+# Both committed together
+connection.commit()
+```
+
+### Publishing from Outbox
+
+Outbox publisher worker (`apps/api/scripts/publish_outbox.py`):
+
+```python
+import pika
+import psycopg
+import time
+
+def publish_outbox_events():
+    # Connect to RabbitMQ
+    connection = pika.BlockingConnection(pika.URLParameters(settings.RABBITMQ_URL))
+    channel = connection.channel()
+    
+    # Declare queues (idempotent)
+    for queue_name in QUEUES:
+        channel.queue_declare(queue=queue_name, durable=True)
+    
+    while True:
+        with get_db_connection() as db_conn:
+            with db_conn.cursor() as cursor:
+                # Fetch pending events
+                cursor.execute(
+                    "SELECT * FROM outbox_event "
+                    "WHERE status = 'pending' AND available_at <= now() "
+                    "ORDER BY created_at LIMIT 100 FOR UPDATE SKIP LOCKED"
+                )
+                events = cursor.fetchall()
+                
+                for event in events:
+                    try:
+                        # Route to correct queue
+                        queue = route_event(event["aggregate_type"], event["event_type"])
+                        
+                        # Publish to RabbitMQ
+                        channel.basic_publish(
+                            exchange='',
+                            routing_key=queue,
+                            body=json.dumps(event["payload"]),
+                            properties=pika.BasicProperties(
+                                delivery_mode=2,  # Persistent
+                                content_type='application/json',
+                            )
+                        )
+                        
+                        # Mark as published
+                        cursor.execute(
+                            "UPDATE outbox_event SET status = 'published', published_at = now() "
+                            "WHERE id = %s",
+                            (event["id"],)
+                        )
+                        db_conn.commit()
+                        
+                    except Exception as e:
+                        # Mark as failed, retry later
+                        cursor.execute(
+                            "UPDATE outbox_event SET retry_count = retry_count + 1, "
+                            "available_at = now() + interval '60 seconds' "
+                            "WHERE id = %s",
+                            (event["id"],)
+                        )
+                        db_conn.commit()
+                        logging.error(f"Failed to publish event {event['id']}: {e}")
+        
+        time.sleep(1)  # Poll every second
+```
+
+Run continuously:
+
+```bash
+pnpm queue:publish
+```
+
+## Queue Design
+
+### Queue List
+
+| Queue | Purpose | Message Types |
+|-------|---------|---------------|
+| `workflow.engine` | Workflow execution events | `workflow.started`, `workflow.completed` |
+| `workflow.notifications` | User notifications | `notification.created`, `task.assigned` |
+| `workflow.reminders` | Task reminders | `task.reminder`, `task.escalation` |
+| `workflow.subworkflow` | Parent-child coordination | `subworkflow.completed`, `subworkflow.failed` |
+| `workflow.dead_letter` | Failed messages | Any failed message after retries |
+
+### Queue Configuration
+
+Queues are declared as **durable** (survive broker restarts):
+
+```python
+import pika
+
+connection = pika.BlockingConnection(pika.URLParameters(settings.RABBITMQ_URL))
+channel = connection.channel()
+
+# Declare all queues
+channel.queue_declare(queue='workflow.engine', durable=True)
+channel.queue_declare(queue='workflow.notifications', durable=True)
+channel.queue_declare(queue='workflow.reminders', durable=True)
+channel.queue_declare(queue='workflow.subworkflow', durable=True)
+
+# Dead letter queue
+channel.queue_declare(
+    queue='workflow.dead_letter',
+    durable=True,
+    arguments={'x-message-ttl': 7 * 24 * 60 * 60 * 1000}  # 7 days retention
+)
+```
+
+### Message Routing
+
+Route messages based on aggregate type and event type:
+
+```python
+def route_event(aggregate_type: str, event_type: str) -> str:
+    """Determine which queue to use for an outbox event."""
+    
+    if event_type.startswith("notification."):
+        return "workflow.notifications"
+    
+    if event_type.startswith("task.reminder") or event_type.startswith("task.escalation"):
+        return "workflow.reminders"
+    
+    if event_type.startswith("subworkflow."):
+        return "workflow.subworkflow"
+    
+    if event_type.startswith("workflow."):
+        return "workflow.engine"
+    
+    # Default
+    return "workflow.engine"
+```
+
+## Message Types
+
+### Notification Messages
+
+**Event**: `notification.created`  
+**Queue**: `workflow.notifications`  
+**Payload**:
+
+```json
+{
+  "userId": "123e4567-e89b-12d3-a456-426614174000",
+  "workflowInstanceId": "123e4567-e89b-12d3-a456-426614174001",
+  "stepInstanceId": "123e4567-e89b-12d3-a456-426614174002",
+  "notificationType": "task_assigned",
+  "title": "Action required: Manager Approval",
+  "body": "The workflow 'Invoice Approval' is waiting for your action."
+}
+```
+
+**Consumer Action**: Send in-app notification, email, or push notification.
+
+### Task Assignment Messages
+
+**Event**: `human_task.assigned`  
+**Queue**: `workflow.notifications`  
+**Payload**:
+
+```json
+{
+  "workflowInstanceId": "123e4567-e89b-12d3-a456-426614174001",
+  "stepInstanceId": "123e4567-e89b-12d3-a456-426614174002",
+  "stepCode": "manager_approval",
+  "assignedUserId": "123e4567-e89b-12d3-a456-426614174003"
+}
+```
+
+**Consumer Action**: Notify user, update real-time dashboard.
+
+### Workflow Action Messages
+
+**Event**: `workflow.action.recorded`  
+**Queue**: `workflow.engine`  
+**Payload**:
+
+```json
+{
+  "workflowInstanceId": "123e4567-e89b-12d3-a456-426614174001",
+  "stepInstanceId": "123e4567-e89b-12d3-a456-426614174002",
+  "actionType": "approve",
+  "actorUserId": "123e4567-e89b-12d3-a456-426614174003"
+}
+```
+
+**Consumer Action**: Update analytics, trigger webhooks, log to external system.
+
+### Subworkflow Completion Messages
+
+**Event**: `subworkflow.completed`  
+**Queue**: `workflow.subworkflow`  
+**Payload**:
+
+```json
+{
+  "parentWorkflowInstanceId": "123e4567-e89b-12d3-a456-426614174001",
+  "childWorkflowInstanceId": "123e4567-e89b-12d3-a456-426614174004",
+  "resultAction": "approve",
+  "output": {"approvedAmount": 5000}
+}
+```
+
+**Consumer Action**: Resume parent workflow (handled automatically in `_complete_workflow`).
+
+## Consumers
+
+### Basic Consumer Pattern
+
+```python
+import pika
+import json
+
+def callback(ch, method, properties, body):
+    try:
+        # Parse message
+        payload = json.loads(body)
+        
+        # Process message
+        process_notification(payload)
+        
+        # Acknowledge success
+        ch.basic_ack(delivery_tag=method.delivery_tag)
+        
+    except Exception as e:
+        logging.error(f"Failed to process message: {e}")
+        # Reject and requeue (or send to DLQ after N retries)
+        ch.basic_nack(delivery_tag=method.delivery_tag, requeue=False)
+
+# Connect and consume
+connection = pika.BlockingConnection(pika.URLParameters(settings.RABBITMQ_URL))
+channel = connection.channel()
+
+channel.basic_qos(prefetch_count=10)  # Process 10 at a time
+channel.basic_consume(
+    queue='workflow.notifications',
+    on_message_callback=callback,
+    auto_ack=False  # Manual acknowledgment
+)
+
+channel.start_consuming()
+```
+
+### Retry Strategy
+
+Messages that fail are retried with exponential backoff:
+
+1. **First failure**: Requeue with 1 minute delay
+2. **Second failure**: Requeue with 5 minute delay
+3. **Third failure**: Requeue with 30 minute delay
+4. **After 3 retries**: Move to dead-letter queue
+
+Implemented in outbox worker retry logic.
+
+## Priority Task Release Worker
+
+For `priority_chain` approval mode, queued tasks need to be released when escalation timeout occurs.
+
+Worker (`apps/api/scripts/release_priority_tasks.py`):
+
+```python
+import time
+from datetime import UTC, datetime
+
+def release_priority_tasks():
+    while True:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                # Find queued tasks past escalation_due_at
+                cursor.execute(
+                    "SELECT * FROM human_task "
+                    "WHERE status = 'queued' AND escalation_due_at <= %s "
+                    "FOR UPDATE SKIP LOCKED",
+                    (datetime.now(tz=UTC),)
+                )
+                tasks = cursor.fetchall()
+                
+                for task in tasks:
+                    # Release task
+                    cursor.execute(
+                        "UPDATE human_task SET status = 'open', escalation_due_at = NULL "
+                        "WHERE id = %s",
+                        (task["id"],)
+                    )
+                    
+                    # Create notification
+                    _create_notification(
+                        cursor,
+                        task["assigned_user_id"],
+                        task["workflow_instance_id"],
+                        task["step_instance_id"],
+                        "task_escalated",
+                        f"Escalation: {task['step_label']}",
+                        "Previous assignee did not respond in time."
+                    )
+                    
+                    conn.commit()
+        
+        time.sleep(10)  # Check every 10 seconds
+```
+
+Run continuously:
+
+```bash
+pnpm queue:release
+```
+
+## Docker Compose Setup
+
+From `infra/docker-compose.yml`:
+
+```yaml
+services:
+  rabbitmq:
+    image: rabbitmq:3.13-management
+    container_name: workflow-engine-rabbitmq
+    environment:
+      RABBITMQ_DEFAULT_USER: workflow
+      RABBITMQ_DEFAULT_PASS: workflow
+    ports:
+      - "5672:5672"    # AMQP protocol
+      - "15672:15672"  # Management UI
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  rabbitmq_data:
+```
+
+Start RabbitMQ:
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+```
+
+Access management UI:
+
+```
+http://localhost:15672
+Username: workflow
+Password: workflow
+```
+
+## Monitoring
+
+### Queue Metrics
+
+RabbitMQ Management UI provides:
+- Message rates (publish/deliver/ack)
+- Queue depth (ready/unacked messages)
+- Consumer count
+- Memory usage
+
+### Outbox Metrics
+
+Monitor outbox table:
+
+```sql
+-- Pending events count
+SELECT COUNT(*) FROM outbox_event WHERE status = 'pending';
+
+-- Failed events
+SELECT COUNT(*) FROM outbox_event WHERE status = 'failed';
+
+-- Average publish latency
+SELECT AVG(EXTRACT(EPOCH FROM (published_at - created_at))) AS avg_latency_seconds
+FROM outbox_event
+WHERE status = 'published' AND created_at > now() - interval '1 hour';
+```
+
+### Alerts
+
+Set up alerts for:
+- Outbox pending > 1000 events
+- Outbox failed > 100 events
+- Queue depth > 10,000 messages
+- Consumer lag > 5 minutes
+
+## Production Recommendations
+
+<AccordionGroup>
+  <Accordion title="Use Managed RabbitMQ">
+    Services like CloudAMQP or AWS Amazon MQ handle:
+    - High availability
+    - Automatic failover
+    - Monitoring and alerts
+    - Backups
+  </Accordion>
+
+  <Accordion title="Enable Persistence">
+    Configure queues and messages as durable:
+    ```python
+    channel.queue_declare(queue='workflow.engine', durable=True)
+    channel.basic_publish(
+        ...,
+        properties=pika.BasicProperties(delivery_mode=2)  # Persistent
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Set Prefetch Limits">
+    Prevent consumers from being overwhelmed:
+    ```python
+    channel.basic_qos(prefetch_count=10)  # Process max 10 at once
+    ```
+  </Accordion>
+
+  <Accordion title="Use Dead Letter Queues">
+    Capture failed messages for debugging:
+    ```python
+    channel.queue_declare(
+        queue='workflow.notifications',
+        arguments={
+            'x-dead-letter-exchange': 'dlx',
+            'x-dead-letter-routing-key': 'workflow.dead_letter'
+        }
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="Monitor Outbox Table Size">
+    Archive old published events:
+    ```sql
+    DELETE FROM outbox_event
+    WHERE status = 'published' AND published_at < now() - interval '7 days';
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Benefits of This Architecture
+
+**Reliability**: Database transaction guarantees no lost messages
+
+**Observability**: All events logged in `outbox_event` table
+
+**Debuggability**: Can replay messages from outbox
+
+**Decoupling**: Queue consumers can be added/removed without changing core logic
+
+**Scalability**: Workers scale independently of API servers
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Execution Model" icon="gears" href="./execution-model">
+    How workflows execute step-by-step
+  </Card>
+  <Card title="Deployment Guide" icon="rocket" href="./deployment">
+    Deploy workers and RabbitMQ to production
+  </Card>
+</CardGroup>

@@ -1,0 +1,228 @@
+---
+title: "Update Workflow Definition"
+description: "Update an existing workflow definition and create a new version"
+---
+
+## Overview
+
+Update an existing workflow definition by creating a new version. This endpoint updates the workflow metadata (key, name, description) and creates a new version with the provided steps and transitions.
+
+## Endpoint
+
+```
+PUT /api/v1/workflow-definitions/{definition_id}
+```
+
+## Authentication
+
+This endpoint requires authentication. Include a valid authentication token in your request.
+
+## Path Parameters
+
+<ParamField path="definition_id" type="string (UUID)" required>
+  The unique identifier of the workflow definition to update
+</ParamField>
+
+## Request Body
+
+The request body has the same structure as creating a new workflow definition.
+
+<ParamField body="key" type="string" required>
+  Unique key for the workflow definition
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Display name of the workflow definition
+</ParamField>
+
+<ParamField body="description" type="string" default="">
+  Description of the workflow definition
+</ParamField>
+
+<ParamField body="builderLayout" type="object" default="{}">
+  Visual layout configuration for the workflow builder UI. If not provided, will be automatically generated.
+</ParamField>
+
+<ParamField body="steps" type="array" required>
+  Array of workflow step definitions. Must include exactly one "start" step and at least one terminal or "end" step.
+  
+  See the [Create Workflow Definition](/api/definitions/create) endpoint for the complete step schema.
+</ParamField>
+
+<ParamField body="transitions" type="array" required>
+  Array of workflow transition definitions. Must connect all non-terminal steps.
+  
+  See the [Create Workflow Definition](/api/definitions/create) endpoint for the complete transition schema.
+</ParamField>
+
+## Validation Rules
+
+The same validation rules apply as when creating a workflow definition:
+
+- Step codes must be unique
+- Exactly one start step is required
+- At least one terminal or end step is required
+- All transition step codes must exist
+- Custom action transitions must include an actionCode
+- No unconditional self-loops
+- Only one unconditional transition per source step and action type
+- Subworkflow steps must include a subworkflowMapping
+- Non-terminal steps must have at least one outgoing transition
+- All steps must be reachable from the start step
+- Cycles without guards are not allowed
+
+## Response
+
+Returns the updated workflow definition with full details.
+
+<ResponseField name="item" type="object" required>
+  The updated workflow definition (same structure as GET /api/v1/workflow-definitions/{definition_id})
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X PUT https://api.example.com/api/v1/workflow-definitions/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "simple-approval",
+    "name": "Simple Approval Workflow v2",
+    "description": "Updated two-step approval process with enhanced features",
+    "steps": [
+      {
+        "stepCode": "start",
+        "stepLabel": "Start",
+        "stepType": "start",
+        "assignmentPolicy": {
+          "approvalMode": "priority_chain"
+        },
+        "associations": []
+      },
+      {
+        "stepCode": "manager_approval",
+        "stepLabel": "Manager Approval",
+        "stepType": "human_task",
+        "remarkRequiredOnReject": true,
+        "remarkRequiredOnApprove": true,
+        "assignmentPolicy": {
+          "approvalMode": "approve_any_one",
+          "escalationTimeoutSeconds": 86400,
+          "reminderIntervalSeconds": 3600
+        },
+        "associations": [
+          {
+            "associationType": "role",
+            "associationValue": "manager",
+            "canApprove": true,
+            "canReject": true
+          }
+        ],
+        "notificationTemplate": {
+          "titleTemplate": "New approval request",
+          "bodyTemplate": "You have a new task in {{workflowName}}"
+        }
+      },
+      {
+        "stepCode": "end",
+        "stepLabel": "End",
+        "stepType": "end",
+        "assignmentPolicy": {
+          "approvalMode": "priority_chain"
+        },
+        "associations": []
+      }
+    ],
+    "transitions": [
+      {
+        "fromStepCode": "start",
+        "toStepCode": "manager_approval",
+        "actionType": "approve",
+        "transitionLabel": "Submit"
+      },
+      {
+        "fromStepCode": "manager_approval",
+        "toStepCode": "end",
+        "actionType": "approve",
+        "transitionLabel": "Approve"
+      },
+      {
+        "fromStepCode": "manager_approval",
+        "toStepCode": "end",
+        "actionType": "reject",
+        "transitionLabel": "Reject"
+      }
+    ]
+  }'
+```
+
+## Example Response
+
+```json
+{
+  "item": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "key": "simple-approval",
+    "name": "Simple Approval Workflow v2",
+    "description": "Updated two-step approval process with enhanced features",
+    "status": "draft",
+    "latestVersionId": "770e8400-e29b-41d4-a716-446655440002",
+    "latestVersionNo": 2,
+    "graphJson": {
+      "workflow": {
+        "key": "simple-approval",
+        "name": "Simple Approval Workflow v2",
+        "description": "Updated two-step approval process with enhanced features"
+      },
+      "steps": [...],
+      "transitions": [...]
+    },
+    "builderLayout": {
+      "nodes": [...],
+      "edges": [...],
+      "viewport": {"x": 0, "y": 0, "zoom": 1}
+    },
+    "steps": [...],
+    "transitions": [...]
+  }
+}
+```
+
+## Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication token is missing or invalid
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  Workflow definition not found
+  
+  ```json
+  {
+    "detail": "Workflow definition not found."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="422" type="Unprocessable Entity">
+  Validation errors in the workflow definition
+  
+  ```json
+  {
+    "detail": {
+      "errors": [
+        "Exactly one start step is required.",
+        "Step 'approval' must have at least one outgoing transition."
+      ]
+    }
+  }
+  ```
+</ResponseField>
+
+<Note>
+Updating a workflow definition creates a new version. The version number is automatically incremented.
+</Note>
+
+<Note>
+Existing workflow instances continue to run on their original version. New instances will use the latest published version.
+</Note>

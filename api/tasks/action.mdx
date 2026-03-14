@@ -1,0 +1,256 @@
+---
+title: "Execute Task Action"
+description: "Execute any action on a human task including custom actions"
+---
+
+## Endpoint
+
+<CodeGroup>
+```http
+POST /api/v1/human-tasks/{task_id}/actions
+```
+</CodeGroup>
+
+Executes an action on a human task. This is the general-purpose endpoint that supports all action types: `approve`, `reject`, `revert`, and `custom` actions.
+
+For convenience, use the dedicated endpoints for standard actions (`/approve`, `/reject`, `/revert`).
+
+## Authentication
+
+This endpoint requires authentication. Include a valid Bearer token in the Authorization header.
+
+## Path Parameters
+
+<ParamField path="task_id" type="uuid" required>
+  The unique identifier of the task to action
+</ParamField>
+
+## Request Body
+
+<ParamField body="actionType" type="string" required>
+  The type of action to perform:
+  - `approve`: Approve the task
+  - `reject`: Reject the task
+  - `revert`: Revert the task to a previous step
+  - `custom`: Execute a custom action defined in the workflow
+</ParamField>
+
+<ParamField body="actionCode" type="string">
+  **Required for custom actions**. The unique code identifying which custom action to execute. Must match a transition's `action_code` in the workflow definition.
+</ParamField>
+
+<ParamField body="remark" type="string">
+  Optional comment or explanation for the action. **Required** if:
+  - `actionType` is `approve` and `remark_required_on_approve` is true
+  - `actionType` is `reject` and `remark_required_on_reject` is true
+  - `actionType` is `revert` and `remark_required_on_revert` is true
+</ParamField>
+
+<ParamField body="payload" type="object" default="{}">
+  Optional additional data to include with the action. Useful for capturing form data, decision criteria, or other context.
+</ParamField>
+
+## Response Schema
+
+<ResponseField name="workflowInstanceId" type="uuid" required>
+  ID of the workflow instance
+</ResponseField>
+
+<ResponseField name="stepInstanceId" type="uuid" required>
+  ID of the step instance that was actioned
+</ResponseField>
+
+<ResponseField name="actionType" type="string" required>
+  The action type that was executed
+</ResponseField>
+
+<ResponseField name="workflowStatus" type="string" required>
+  Current status of the workflow: `running`, `waiting`, `completed`, `rejected`, `failed`, or `cancelled`
+</ResponseField>
+
+<ResponseField name="nextStepCode" type="string">
+  Code of the next step in the workflow, or `null` if the workflow completed or is waiting for other approvals
+</ResponseField>
+
+## Example Requests
+
+<CodeGroup>
+```bash Approve Action
+curl -X POST "https://api.example.com/api/v1/human-tasks/550e8400-e29b-41d4-a716-446655440001/actions" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actionType": "approve",
+    "remark": "Looks good, approved"
+  }'
+```
+
+```bash Custom Action
+curl -X POST "https://api.example.com/api/v1/human-tasks/550e8400-e29b-41d4-a716-446655440001/actions" \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "actionType": "custom",
+    "actionCode": "escalate_to_director",
+    "remark": "Amount exceeds my approval limit",
+    "payload": {
+      "escalationReason": "AMOUNT_THRESHOLD",
+      "originalApprover": "manager@example.com"
+    }
+  }'
+```
+
+```javascript Custom Action
+const response = await fetch(
+  'https://api.example.com/api/v1/human-tasks/550e8400-e29b-41d4-a716-446655440001/actions',
+  {
+    method: 'POST',
+    headers: {
+      'Authorization': 'Bearer YOUR_ACCESS_TOKEN',
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      actionType: 'custom',
+      actionCode: 'request_more_info',
+      remark: 'Need vendor comparison',
+      payload: {
+        infoNeeded: ['vendor_quotes', 'cost_comparison']
+      }
+    })
+  }
+);
+
+const data = await response.json();
+```
+
+```python Revert Action
+import requests
+
+response = requests.post(
+    'https://api.example.com/api/v1/human-tasks/550e8400-e29b-41d4-a716-446655440001/actions',
+    headers={
+        'Authorization': 'Bearer YOUR_ACCESS_TOKEN',
+        'Content-Type': 'application/json'
+    },
+    json={
+        'actionType': 'revert',
+        'remark': 'Missing required documentation',
+        'payload': {
+            'requiredDocs': ['signed_contract', 'insurance_cert']
+        }
+    }
+)
+
+data = response.json()
+```
+</CodeGroup>
+
+## Example Responses
+
+<CodeGroup>
+```json 200 OK - Standard Action
+{
+  "workflowInstanceId": "550e8400-e29b-41d4-a716-446655440000",
+  "stepInstanceId": "550e8400-e29b-41d4-a716-446655440002",
+  "actionType": "approve",
+  "workflowStatus": "waiting",
+  "nextStepCode": "director_approval"
+}
+```
+
+```json 200 OK - Custom Action
+{
+  "workflowInstanceId": "550e8400-e29b-41d4-a716-446655440000",
+  "stepInstanceId": "550e8400-e29b-41d4-a716-446655440002",
+  "actionType": "custom",
+  "workflowStatus": "waiting",
+  "nextStepCode": "legal_review"
+}
+```
+
+```json 404 Not Found
+{
+  "detail": "Task not found."
+}
+```
+
+```json 403 Forbidden
+{
+  "detail": "You are not assigned to this task."
+}
+```
+
+```json 409 Conflict
+{
+  "detail": "Only open tasks can be actioned."
+}
+```
+
+```json 422 Unprocessable Entity - Missing Remark
+{
+  "detail": "A remark is required for this action."
+}
+```
+
+```json 422 Unprocessable Entity - No Transition
+{
+  "detail": "No matching transition exists for this action."
+}
+```
+</CodeGroup>
+
+## Custom Actions
+
+Custom actions allow workflows to define domain-specific actions beyond the standard approve/reject/revert flow. Examples include:
+
+- `escalate_to_director`: Send to a higher authority
+- `request_legal_review`: Route to legal team
+- `request_revision`: Send back with specific feedback
+- `conditional_approve`: Approve with conditions
+
+### Custom Action Requirements
+
+1. The workflow must have a transition with `action_type = 'custom'` and a matching `action_code`
+2. The `actionCode` parameter must match the transition's `action_code` exactly
+3. The task's `availableActions` array will include `"custom"` if custom actions are available
+
+<Note>
+For custom actions, the `actionCode` field is **required** and must match a defined transition in the workflow. The workflow engine uses this to determine which path to follow.
+</Note>
+
+## Validation Rules
+
+The endpoint validates the following before executing the action:
+
+1. **Task exists**: Returns 404 if task not found
+2. **Task status**: Must be `open` (returns 409 if not)
+3. **User assignment**: User must be assigned to the task (returns 403 if not)
+4. **Remark requirement**: Remark must be provided if required by step definition (returns 422 if missing)
+5. **Transition exists**: A matching transition must be defined (returns 422 if not found, except for approve)
+6. **Action code**: For custom actions, `actionCode` must match a transition (returns 422 if not)
+
+## Workflow Advancement
+
+After the action is executed:
+
+- The task status changes to `completed`
+- Other tasks in the same step are cancelled (unless in `approve_all` mode)
+- The step instance status changes based on action type
+- A workflow action record is created with the remark and payload
+- The workflow transitions to the next step (or completes)
+
+### Special Case: Approve All Mode
+
+When `approvalModeSnapshot` is `approve_all`, the workflow does **not** advance until all tasks are approved. The response will have:
+- `workflowStatus`: `waiting`
+- `nextStepCode`: `null` (indicating more approvals are needed)
+
+## Error Handling
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Action executed successfully |
+| 403 | User is not assigned to this task |
+| 404 | Task not found |
+| 409 | Task status is not `open` |
+| 422 | Validation failed (missing remark, invalid action code, no transition) |

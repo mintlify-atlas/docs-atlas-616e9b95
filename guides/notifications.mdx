@@ -1,0 +1,618 @@
+---
+title: Notifications
+description: How notifications work, notification templates, in-app notifications, marking as read, and reminder configuration
+---
+
+## Overview
+
+Notifications keep users informed about workflow actions, task assignments, and reminders. This guide covers the notification system, templates, delivery, and management.
+
+## How Notifications Work
+
+Notifications are created when:
+
+1. **Task assigned**: A human task becomes `open` for a user
+2. **Task reminder**: A due date is reached (if configured)
+3. **Escalation**: A task is escalated to the next user in priority_chain mode
+4. **Custom events**: Triggered by system or workflow logic
+
+### Notification Flow
+
+<Steps>
+
+### Step 1: Workflow reaches human task step
+
+When a workflow enters a `human_task` step, the engine:
+
+1. Creates step instance
+2. Resolves assignees from step associations
+3. Creates human task records
+4. Determines which tasks are `open` (based on approval mode)
+
+### Step 2: Notification template rendering
+
+For each `open` task, the engine:
+
+1. Fetches the notification template for the step
+2. Renders title and body with context variables
+3. Creates a notification record in the database
+
+### Step 3: Outbox event creation
+
+The notification is written to the `outbox_event` table:
+
+```json
+{
+  "aggregate_type": "notification",
+  "aggregate_id": "ff0e8400-e29b-41d4-a716-446655440000",
+  "event_type": "notification.created",
+  "payload": {
+    "userId": "770e8400-e29b-41d4-a716-446655440000",
+    "workflowInstanceId": "880e8400-e29b-41d4-a716-446655440000",
+    "notificationType": "task_assigned",
+    "title": "Approval needed: Manager Approval",
+    "body": "Vendor Onboarding is waiting for your action."
+  },
+  "status": "pending"
+}
+```
+
+### Step 4: Outbox publisher (RabbitMQ)
+
+A background worker polls the outbox table and publishes events to RabbitMQ:
+
+```bash
+pnpm queue:publish
+```
+
+### Step 5: Notification consumer
+
+A consumer processes the notification event and delivers it (e.g., updates UI, sends push notification, emails).
+
+</Steps>
+
+## Notification Templates
+
+### Template Structure
+
+Notification templates are defined per step:
+
+```json
+{
+  "stepCode": "manager_approval",
+  "notificationTemplate": {
+    "titleTemplate": "Approval needed: {stepLabel}",
+    "bodyTemplate": "{workflowName} is waiting for {actorEmail} on {stepCode}.",
+    "allowActorOverride": true
+  }
+}
+```
+
+### Template Variables
+
+You can use these placeholders in templates:
+
+- `{workflowName}`: Workflow definition name (e.g., "Vendor Onboarding")
+- `{stepLabel}`: Step display label (e.g., "Manager Approval")
+- `{stepCode}`: Step code (e.g., "manager_approval")
+- `{actorEmail}`: Assignee's email address
+
+### Variable Rendering
+
+The engine replaces placeholders with actual values:
+
+```javascript
+title = "Approval needed: {stepLabel}"
+// Rendered as:
+title = "Approval needed: Manager Approval"
+
+body = "{workflowName} is waiting for {actorEmail}."
+// Rendered as:
+body = "Vendor Onboarding is waiting for manager@example.com."
+```
+
+### Fallback Templates
+
+If no template is defined, the system uses defaults:
+
+```json
+{
+  "titleTemplate": "Action required: {stepLabel}",
+  "bodyTemplate": "The workflow '{workflowName}' is waiting for your action."
+}
+```
+
+## Viewing Notifications
+
+<Steps>
+
+### Step 1: Fetch your notifications
+
+Retrieve all notifications for the current user:
+
+```bash
+curl http://localhost:8000/api/v1/me/notifications \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response**:
+
+```json
+{
+  "items": [
+    {
+      "id": "ff0e8400-e29b-41d4-a716-446655440000",
+      "workflowInstanceId": "880e8400-e29b-41d4-a716-446655440000",
+      "stepInstanceId": "aa0e8400-e29b-41d4-a716-446655440000",
+      "notificationType": "task_assigned",
+      "title": "Approval needed: Manager Approval",
+      "body": "Vendor Onboarding is waiting for your action on manager_approval.",
+      "isRead": false,
+      "readAt": null,
+      "createdAt": "2026-03-14T10:30:01Z"
+    },
+    {
+      "id": "gg0e8400-e29b-41d4-a716-446655440000",
+      "workflowInstanceId": "990e8400-e29b-41d4-a716-446655440000",
+      "stepInstanceId": "hh0e8400-e29b-41d4-a716-446655440000",
+      "notificationType": "reminder",
+      "title": "Reminder: Manager Approval",
+      "body": "You have an outstanding task: Manager Approval",
+      "isRead": true,
+      "readAt": "2026-03-14T11:00:00Z",
+      "createdAt": "2026-03-14T09:00:00Z"
+    }
+  ]
+}
+```
+
+### Step 2: Display in UI
+
+Notifications are typically displayed:
+
+- In a notification center or bell icon
+- As unread count badges
+- In a timeline or feed
+- As toast/alert messages
+
+### Step 3: Navigate to workflow
+
+Users can click a notification to view the related workflow instance:
+
+```
+Navigate to: /workflows/{workflowInstanceId}
+```
+
+</Steps>
+
+## Notification Types
+
+### Task Assigned
+
+**Type**: `task_assigned`
+
+**When**: A human task becomes actionable for the user
+
+**Example**:
+
+```json
+{
+  "notificationType": "task_assigned",
+  "title": "Approval needed: Manager Approval",
+  "body": "Vendor Onboarding is waiting for your action."
+}
+```
+
+### Reminder
+
+**Type**: `reminder`
+
+**When**: A task's due date is reached and it's still open
+
+**Configuration**:
+
+```json
+{
+  "assignmentPolicy": {
+    "reminderIntervalSeconds": 43200
+  }
+}
+```
+
+This sends a reminder every 12 hours until the task is completed.
+
+### Task Completed
+
+**Type**: `task_completed`
+
+**When**: A task you created or are tracking is completed
+
+### Escalation
+
+**Type**: `task_assigned` (for the new assignee)
+
+**When**: A task is escalated to the next user in the priority chain
+
+**Example**:
+
+```json
+{
+  "notificationType": "task_assigned",
+  "title": "Escalated: Manager Approval",
+  "body": "This task has been escalated to you."
+}
+```
+
+## Marking Notifications as Read
+
+<Steps>
+
+### Step 1: Identify the notification ID
+
+Get the `id` from the notifications list.
+
+### Step 2: Mark as read
+
+```bash
+curl -X POST http://localhost:8000/api/v1/notifications/{notification_id}/read \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response**:
+
+```json
+{
+  "id": "ff0e8400-e29b-41d4-a716-446655440000",
+  "workflowInstanceId": "880e8400-e29b-41d4-a716-446655440000",
+  "stepInstanceId": "aa0e8400-e29b-41d4-a716-446655440000",
+  "notificationType": "task_assigned",
+  "title": "Approval needed: Manager Approval",
+  "body": "Vendor Onboarding is waiting for your action.",
+  "isRead": true,
+  "readAt": "2026-03-14T11:00:00Z",
+  "createdAt": "2026-03-14T10:30:01Z"
+}
+```
+
+### Step 3: Update UI
+
+The UI should:
+
+- Remove the unread indicator
+- Decrement the unread count badge
+- Move to "Read" section (if using tabs)
+
+</Steps>
+
+## Reminder Configuration
+
+Reminders are sent at intervals until a task is completed:
+
+### Setting Reminder Interval
+
+Configure in the step's assignment policy:
+
+```json
+{
+  "assignmentPolicy": {
+    "approvalMode": "priority_chain",
+    "reminderIntervalSeconds": 43200
+  }
+}
+```
+
+**Common intervals**:
+
+- 43200 seconds = 12 hours
+- 86400 seconds = 24 hours
+- 3600 seconds = 1 hour
+
+### Reminder Lifecycle
+
+<Steps>
+
+### Step 1: Task created with due date
+
+```json
+{
+  "id": "dd0e8400-e29b-41d4-a716-446655440000",
+  "status": "open",
+  "dueAt": "2026-03-15T10:30:00Z",
+  "createdAt": "2026-03-14T10:30:00Z"
+}
+```
+
+The `dueAt` is calculated as:
+
+```
+dueAt = createdAt + reminderIntervalSeconds
+```
+
+### Step 2: Reminder worker checks for overdue tasks
+
+A background worker queries:
+
+```sql
+SELECT * FROM human_task
+WHERE status = 'open'
+  AND due_at <= NOW()
+```
+
+### Step 3: Reminder notification sent
+
+A new notification is created:
+
+```json
+{
+  "notificationType": "reminder",
+  "title": "Reminder: {stepLabel}",
+  "body": "You still have a pending task: {stepLabel}"
+}
+```
+
+### Step 4: Due date updated
+
+The task's `dueAt` is reset:
+
+```
+new dueAt = now() + reminderIntervalSeconds
+```
+
+### Step 5: Loop continues until task is completed
+
+</Steps>
+
+<Info>
+Reminder processing requires a background worker. Run `pnpm queue:publish` and configure a reminder consumer.
+</Info>
+
+## In-App Notification Display
+
+### Unread Count
+
+Display the number of unread notifications:
+
+```javascript
+const unreadCount = notifications.filter(n => !n.isRead).length
+```
+
+### Notification Badge
+
+```jsx
+<BellIcon />
+{unreadCount > 0 && (
+  <Badge variant="destructive">{unreadCount}</Badge>
+)}
+```
+
+### Notification List
+
+```jsx
+{notifications.map(notification => (
+  <NotificationCard
+    key={notification.id}
+    title={notification.title}
+    body={notification.body}
+    isRead={notification.isRead}
+    timestamp={notification.createdAt}
+    onClick={() => markAsRead(notification.id)}
+  />
+))}
+```
+
+### Mark All as Read
+
+Provide a bulk action:
+
+```javascript
+async function markAllAsRead() {
+  const unread = notifications.filter(n => !n.isRead)
+  await Promise.all(
+    unread.map(n => 
+      fetch(`/api/v1/notifications/${n.id}/read`, { method: 'POST' })
+    )
+  )
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+
+<Card title="Keep Templates Concise" icon="message">
+Notification templates should be brief and actionable. Aim for 1-2 sentences.
+</Card>
+
+<Card title="Use Clear Titles" icon="heading">
+Titles should immediately convey the action needed (e.g., "Approval needed: Manager Approval").
+</Card>
+
+<Card title="Set Appropriate Reminders" icon="clock">
+Balance frequency: too frequent = annoying, too infrequent = forgotten. 12-24 hours is typical.
+</Card>
+
+<Card title="Test Template Rendering" icon="vial">
+Verify that template variables render correctly before publishing workflows.
+</Card>
+
+</CardGroup>
+
+## Notification Architecture
+
+### Database Table
+
+Notifications are stored in the `notification` table:
+
+```sql
+CREATE TABLE notification (
+  id UUID PRIMARY KEY,
+  user_id UUID NOT NULL,
+  workflow_instance_id UUID,
+  step_instance_id UUID,
+  notification_type TEXT NOT NULL,
+  title TEXT NOT NULL,
+  body TEXT NOT NULL,
+  is_read BOOLEAN DEFAULT FALSE,
+  read_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+```
+
+### Outbox Pattern
+
+Notifications use the transactional outbox pattern:
+
+1. **Transaction**: Notification + outbox event created atomically
+2. **Publisher**: Polls outbox, publishes to RabbitMQ
+3. **Consumer**: Processes event, delivers notification
+4. **Acknowledgment**: Marks outbox event as published
+
+This ensures:
+
+- **Reliability**: No lost notifications
+- **Consistency**: Database is source of truth
+- **Resilience**: RabbitMQ outages don't cause data loss
+
+### RabbitMQ Queues
+
+Notifications are published to:
+
+```
+workflow.notifications
+```
+
+Consumers subscribe to this queue and:
+
+- Update UI state
+- Send push notifications
+- Send emails (future)
+- Log events
+
+## Troubleshooting
+
+<AccordionGroup>
+
+<Accordion title="No notifications received">
+Check:
+1. Task is `open` (not `queued`)
+2. Notification template is configured
+3. Outbox publisher is running (`pnpm queue:publish`)
+4. RabbitMQ is running and accessible
+</Accordion>
+
+<Accordion title="Template variables not rendering">
+Ensure:
+1. Variable names are correct (case-sensitive)
+2. Curly braces are used: `{variableName}`
+3. Template is saved in the workflow definition
+</Accordion>
+
+<Accordion title="Notifications marked as read don't disappear">
+The API only sets `isRead: true`. Your UI must filter or move read notifications to a separate view.
+</Accordion>
+
+<Accordion title="Reminders not sent">
+Verify:
+1. `reminderIntervalSeconds` is set in assignment policy
+2. Task has a `dueAt` timestamp
+3. Reminder worker is running
+</Accordion>
+
+<Accordion title="Duplicate notifications">
+Check for:
+1. Duplicate outbox events (idempotency issue)
+2. Multiple consumers processing the same event
+3. Consumer not acknowledging messages
+</Accordion>
+
+</AccordionGroup>
+
+## Example: Complete Notification Flow
+
+<Steps>
+
+### Step 1: Workflow starts
+
+Workflow instance created for "Vendor Onboarding".
+
+### Step 2: Human task step reached
+
+Workflow enters `manager_approval` step.
+
+### Step 3: Assignees resolved
+
+Assignees from step associations:
+- User 1 (priority 1): manager@example.com
+- User 2 (priority 2): reviewer1@example.com
+
+### Step 4: Tasks created
+
+In `priority_chain` mode:
+- User 1: `status: open`, `dueAt: 2026-03-15T10:30:00Z`
+- User 2: `status: queued`
+
+### Step 5: Notification created for User 1
+
+```json
+{
+  "userId": "user-1-id",
+  "notificationType": "task_assigned",
+  "title": "Approval needed: Manager Approval",
+  "body": "Vendor Onboarding is waiting for manager@example.com on manager_approval.",
+  "isRead": false
+}
+```
+
+### Step 6: Outbox event created
+
+```json
+{
+  "event_type": "notification.created",
+  "status": "pending"
+}
+```
+
+### Step 7: Publisher sends to RabbitMQ
+
+Outbox worker publishes event to `workflow.notifications` queue.
+
+### Step 8: Consumer delivers notification
+
+Consumer updates UI, sends push notification to User 1.
+
+### Step 9: User views notification
+
+User 1 opens notification center, sees unread notification.
+
+### Step 10: User marks as read
+
+User clicks notification:
+
+```bash
+POST /api/v1/notifications/{id}/read
+```
+
+Notification updated:
+
+```json
+{
+  "isRead": true,
+  "readAt": "2026-03-14T11:00:00Z"
+}
+```
+
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Task Actions" icon="check-circle" href="/guides/task-actions">
+Learn how to approve, reject, and revert tasks
+</Card>
+
+<Card title="Creating Workflows" icon="diagram-project" href="/guides/creating-workflows">
+Build workflow definitions with notification templates
+</Card>
+
+</CardGroup>

@@ -1,0 +1,511 @@
+---
+title: Workflow Builder
+description: How to use the visual workflow builder to create and edit workflows with a drag-and-drop interface
+---
+
+## Overview
+
+The Workflow Builder provides a visual interface for creating and editing workflow definitions. It includes a live React Flow graph, step editor, transition editor, and real-time validation.
+
+## Accessing the Builder
+
+Navigate to the Builder page in your Next.js application:
+
+```
+http://localhost:3000/builder
+```
+
+<Note>
+You must be authenticated with a Better Auth session to access the builder.
+</Note>
+
+## Builder Interface
+
+The builder interface consists of four main sections:
+
+1. **Workflow Metadata**: Key, name, and description
+2. **Live Graph Preview**: Visual representation using React Flow
+3. **Steps Section**: Configure individual workflow steps
+4. **Transitions Section**: Define connections between steps
+
+## Creating a Workflow
+
+<Steps>
+
+### Step 1: Enter workflow metadata
+
+Start by defining your workflow's basic information:
+
+- **Workflow key**: Unique identifier (e.g., `vendor_onboarding`)
+- **Workflow name**: Display name (e.g., "Vendor Onboarding")
+- **Description**: Purpose and context
+
+<Tip>
+Use snake_case for keys and Title Case for names. The key cannot be changed after creation.
+</Tip>
+
+### Step 2: Add workflow steps
+
+Click **"Add step"** to create a new step. The builder provides a comprehensive form for each step:
+
+#### Basic Step Properties
+
+- **Step code**: Unique identifier within this workflow (e.g., `manager_approval`)
+- **Step label**: Display name shown to users
+- **Step type**: Choose from:
+  - `start` - Entry point (required)
+  - `human_task` - Requires user action
+  - `system_task` - Automated processing
+  - `subworkflow` - Triggers child workflow
+  - `decision` - Conditional branching
+  - `end` - Terminal step
+- **Max visits per instance**: Loop guard (optional)
+- **Description**: Detailed explanation
+
+#### Step Behavior Flags
+
+- ☑ **Allow revert**: Enable revert transitions
+- ☑ **Approve remark required**: Force comment on approval
+- ☑ **Reject remark required**: Force comment on rejection
+- ☑ **Terminal step**: Mark as workflow end
+
+#### Assignment Policy
+
+Configure how tasks are assigned to users:
+
+**Approval mode**:
+- `priority_chain`: Sequential escalation by priority
+- `approve_any_one`: First approval wins
+- `approve_all`: All must approve
+- `notify_all`: Notify everyone
+
+**Escalation settings**:
+- **Required approvals**: How many approvals needed (for `approve_all`)
+- **Escalation timeout (seconds)**: Time before escalating to next user
+- **Reminder interval (seconds)**: How often to send reminders
+- **Max escalation count**: Maximum escalation levels
+
+<Info>
+For `priority_chain` mode, enable "Priority escalation" and set appropriate timeout values (e.g., 86400 seconds = 24 hours).
+</Info>
+
+#### Step Associations
+
+Define who can act on this step:
+
+1. Click **"Add association"**
+2. Select **association type**:
+   - `user`: Specific user by email or ID
+   - `role`: All users with a role
+   - `group`: User group
+3. Enter **association value** (e.g., `manager@example.com`)
+4. Set **priority** (lower numbers first)
+5. Set **notification order** (explicit ordering)
+6. Set **escalation timeout** (step-specific override)
+7. Configure permissions:
+   - ☑ Can approve
+   - ☑ Can reject
+   - ☑ Can revert
+
+**Example association**:
+```
+Type: user
+Value: manager@example.com
+Priority: 1
+Notification order: 1
+Escalation after: 86400 seconds
+✓ Can approve  ✓ Can reject  ✓ Can revert
+```
+
+#### Notification Template
+
+Customize the in-app notification message:
+
+- **Notification title**: Template for notification title
+- **Notification body**: Template for notification body
+- ☑ **Allow actor override**: Users can customize the message
+
+**Template variables**:
+- `{workflowName}`: Workflow definition name
+- `{stepLabel}`: Step display label
+- `{stepCode}`: Step code
+- `{actorEmail}`: Assignee email
+
+**Example template**:
+```
+Title: Approval needed: {stepLabel}
+Body: {workflowName} is waiting for {actorEmail} on {stepCode}.
+```
+
+#### Subworkflow Mapping
+
+For `subworkflow` step types, configure child workflow execution:
+
+- **Child workflow definition**: Select from existing workflows
+- **Trigger mode**:
+  - `sync_wait`: Parent waits for child completion
+  - `async_wait`: Parent waits asynchronously
+- **Input mapping**: JSON mapping from parent to child context
+- **Output mapping**: JSON mapping from child output to parent context
+- **Completion action**: Action when child succeeds (`approve`, `reject`, `revert`, `custom`)
+- **Failure action**: Action when child fails
+
+**Example mappings**:
+```json
+// Input mapping
+{
+  "vendorId": "$.vendorId",
+  "requestedBy": "$.startedBy"
+}
+
+// Output mapping
+{
+  "checkResult": "$.status",
+  "checkDate": "$.completedAt"
+}
+```
+
+### Step 3: Add transitions
+
+Click **"Add transition"** to connect steps:
+
+- **From step**: Source step code
+- **To step**: Target step code (leave empty for terminal transitions)
+- **Action type**: `approve`, `reject`, `revert`, or `custom`
+- **Action code**: Required for custom actions
+- **Transition label**: Text shown on the graph edge (e.g., "submit", "approve")
+- **Description**: Explanation of this transition
+- **Condition expression**: Optional conditional logic
+- **Priority**: Deterministic ordering (lower = higher priority)
+
+**Example transitions**:
+```
+From: start_request → To: manager_approval
+Action: approve
+Label: submit
+Description: Submit for manager approval
+
+From: manager_approval → To: completed
+Action: approve
+Label: approve
+Description: Manager approves the request
+
+From: manager_approval → To: start_request
+Action: revert
+Label: revert
+Description: Send back for revision
+```
+
+### Step 4: Review the live graph
+
+The **Live Graph Preview** automatically renders your workflow as you build it:
+
+- **Nodes**: Represent steps (sized based on type)
+- **Edges**: Represent transitions (animated for approve actions)
+- **Labels**: Show transition labels
+
+The graph updates in real-time as you add or modify steps and transitions.
+
+### Step 5: Save the workflow
+
+Click **"Save workflow to Neon"** to persist your workflow definition.
+
+**What happens during save**:
+
+1. Workflow definition created in PostgreSQL
+2. New version record created (`version_no: 1`)
+3. Steps inserted with associations and policies
+4. Transitions inserted with priorities
+5. Notification templates created
+6. Graph JSON and builder layout stored
+7. Validation runs automatically
+
+**Success indicator**:
+```
+✓ Saved 'Vendor Onboarding' as version 1.
+```
+
+**Error handling**:
+```
+✗ Step codes must be unique.
+✗ Exactly one start step is required.
+```
+
+### Step 6: Publish the workflow
+
+Workflows start in `draft` status. To make them available for instantiation:
+
+1. Click **"Publish latest version"**
+2. The latest version is marked as `is_published: true`
+3. Workflow status changes to `active`
+4. Workflow instances can now be created
+
+<Warning>
+Only one version can be published at a time. Publishing a new version unpublishes the previous one.
+</Warning>
+
+</Steps>
+
+## Editing an Existing Workflow
+
+<Steps>
+
+### Step 1: Load the workflow
+
+The builder displays all existing workflow definitions in a list. Click on a workflow to load it into the builder.
+
+### Step 2: Make changes
+
+Modify steps, transitions, or metadata as needed. The builder form is fully editable.
+
+### Step 3: Save changes
+
+Click **"Save workflow to Neon"** again. This creates a new version:
+
+```
+✓ Updated 'Vendor Onboarding' as version 2.
+```
+
+### Step 4: Publish new version
+
+Click **"Publish latest version"** to activate the new version.
+
+</Steps>
+
+## Using the Visual Mapper
+
+The visual mapper provides an at-a-glance view of your workflow structure:
+
+### Node Styling
+
+- **Width**: Subworkflow steps are wider (200px vs 170px)
+- **Color**: Inherited from theme (`--card`, `--card-foreground`)
+- **Position**: Auto-arranged in a staggered grid
+- **Label**: Shows `stepLabel` or `stepCode`
+
+### Edge Styling
+
+- **Label**: Shows `transitionLabel`
+- **Marker**: Arrow pointing to target
+- **Animation**: Approve actions are animated
+- **Style**: 1.5px stroke width
+
+### Graph Features
+
+- **Background**: Grid pattern (20px gaps)
+- **Zoom**: Fit to view on load
+- **Interaction**: Read-only preview (no dragging)
+
+## Cloning Workflows
+
+To create a copy of an existing workflow:
+
+<Steps>
+
+### Step 1: Load the source workflow
+
+Click on the workflow you want to duplicate.
+
+### Step 2: Click "Duplicate as new workflow"
+
+This creates a new workflow definition with:
+- New key: `{original_key}_copy_{timestamp}`
+- New name: `{original_name} Copy`
+- Same steps and transitions
+- Draft status
+
+### Step 3: Customize the clone
+
+Edit the key, name, and any other properties as needed.
+
+### Step 4: Save and publish
+
+Save the cloned workflow and publish when ready.
+
+</Steps>
+
+## Builder Layout Storage
+
+The builder stores two JSON representations:
+
+### Graph JSON (Canonical)
+
+The source of truth for workflow logic:
+
+```json
+{
+  "workflow": {
+    "key": "vendor_onboarding",
+    "name": "Vendor Onboarding",
+    "description": "..."
+  },
+  "steps": [...],
+  "transitions": [...]
+}
+```
+
+### Builder Layout (Visual)
+
+React Flow positioning and viewport:
+
+```json
+{
+  "nodes": [
+    {
+      "id": "start_request",
+      "position": { "x": 0, "y": 120 },
+      "data": { "label": "Start Request" }
+    }
+  ],
+  "edges": [
+    {
+      "id": "start_request-approve-manager_approval",
+      "source": "start_request",
+      "target": "manager_approval",
+      "label": "submit"
+    }
+  ],
+  "viewport": { "x": 0, "y": 0, "zoom": 1 }
+}
+```
+
+<Info>
+Layout changes don't affect workflow semantics. Only `graphJson` is used for execution.
+</Info>
+
+## Validation
+
+The builder performs server-side validation on save. Common validation rules:
+
+<AccordionGroup>
+
+<Accordion title="Step code uniqueness">
+All step codes must be unique within a workflow definition.
+
+**Error**: `Step codes must be unique.`
+</Accordion>
+
+<Accordion title="Start step requirement">
+Exactly one step must have `stepType: "start"`.
+
+**Error**: `Exactly one start step is required.`
+</Accordion>
+
+<Accordion title="Terminal step requirement">
+At least one step must be terminal (`isTerminal: true` or `stepType: "end"`).
+
+**Error**: `At least one terminal or end step is required.`
+</Accordion>
+
+<Accordion title="Reachability">
+All steps must be reachable from the start step via transitions.
+
+**Error**: `Every step must be reachable from the start step. Unreachable: step_3, step_4`
+</Accordion>
+
+<Accordion title="Outgoing transitions">
+All non-terminal steps must have at least one outgoing transition.
+
+**Error**: `Step 'manager_approval' must have at least one outgoing transition.`
+</Accordion>
+
+<Accordion title="Self-loop prevention">
+Unconditional self-loops are not allowed.
+
+**Error**: `Unconditional self-loop detected on step 'manager_approval'.`
+</Accordion>
+
+<Accordion title="Cycle guards">
+Cycles must have a `maxVisitsPerInstance` guard on at least one step in the cycle.
+
+**Error**: `Detected a cycle without a maxVisitsPerInstance guard on steps: manager_approval, start_request`
+</Accordion>
+
+<Accordion title="Custom action codes">
+Transitions with `actionType: "custom"` must provide an `actionCode`.
+
+**Error**: `Transition 'manager_approval' -> 'completed' requires an actionCode.`
+</Accordion>
+
+<Accordion title="Subworkflow mapping">
+Steps with `stepType: "subworkflow"` must have a `subworkflowMapping` object.
+
+**Error**: `Subworkflow step 'background_check' requires a subworkflow mapping.`
+</Accordion>
+
+</AccordionGroup>
+
+## Best Practices
+
+<CardGroup cols={2}>
+
+<Card title="Start Simple" icon="seedling">
+Begin with a linear workflow (start → human_task → end) and add complexity incrementally.
+</Card>
+
+<Card title="Use Descriptive Labels" icon="tag">
+Step labels and transition labels appear in the UI and notifications—make them user-friendly.
+</Card>
+
+<Card title="Test in Draft" icon="flask">
+Create and test workflows in draft status before publishing to production.
+</Card>
+
+<Card title="Version Control" icon="code-branch">
+Each save creates a new version. Use the version history to track changes.
+</Card>
+
+</CardGroup>
+
+## Keyboard Shortcuts
+
+The builder supports standard browser shortcuts:
+
+- **Ctrl/Cmd + S**: Save workflow (if implemented)
+- **Ctrl/Cmd + Z**: Undo (browser-level)
+- **Tab**: Navigate between form fields
+
+## Troubleshooting
+
+<AccordionGroup>
+
+<Accordion title="Graph doesn't update after adding steps">
+The graph auto-updates. If it doesn't appear, check that:
+1. Step code is unique
+2. Step label is not empty
+3. Browser console for errors
+</Accordion>
+
+<Accordion title="Can't publish workflow">
+Ensure:
+1. Workflow is saved successfully
+2. A workflow definition ID is selected
+3. No validation errors exist
+</Accordion>
+
+<Accordion title="Association not creating tasks">
+Verify:
+1. Association value is a valid email or user ID
+2. User exists in the database
+3. Step type is `human_task`
+</Accordion>
+
+<Accordion title="Subworkflow dropdown is empty">
+You need at least two published workflow definitions to use subworkflows.
+</Accordion>
+
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Creating Workflows via API" icon="code" href="/guides/creating-workflows">
+Learn the JSON structure for creating workflows programmatically
+</Card>
+
+<Card title="Managing Instances" icon="play" href="/guides/managing-instances">
+Start and monitor workflow instances
+</Card>
+
+</CardGroup>

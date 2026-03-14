@@ -1,0 +1,394 @@
+---
+title: Authentication
+description: Authenticate API requests with Better Auth JWT tokens
+---
+
+## Overview
+
+The Workflow Engine API uses **Better Auth JWT tokens** for authentication. All protected endpoints require a valid bearer token in the `Authorization` header.
+
+<Note>
+  Better Auth runs on the Next.js web application at `http://localhost:3000`. The API validates tokens issued by Better Auth using JWKS (JSON Web Key Set) verification.
+</Note>
+
+## Authentication Flow
+
+The authentication architecture separates concerns between the web app and API:
+
+```mermaid
+sequenceDiagram
+    User->>Next.js: Sign in with email/password
+    Next.js->>Better Auth: Authenticate user
+    Better Auth->>Next.js: Create session + JWT
+    Next.js->>User: Return JWT token
+    User->>FastAPI: API request + Bearer token
+    FastAPI->>Better Auth: Verify JWT (JWKS)
+    Better Auth->>FastAPI: Token valid + user claims
+    FastAPI->>User: API response
+```
+
+### Key Components
+
+1. **Next.js Web App** - Hosts Better Auth server and login UI
+2. **Better Auth** - Issues JWT tokens for authenticated users
+3. **FastAPI** - Validates JWT tokens and extracts user identity
+4. **JWKS Endpoint** - Provides public keys for token verification
+
+## Obtaining a JWT Token
+
+To get a JWT token, authenticate through the Next.js web application:
+
+### 1. Sign In via Web App
+
+Users authenticate at `http://localhost:3000` using email and password.
+
+<CodeGroup>
+```javascript Fetch Token from Client
+// After signing in with Better Auth in Next.js
+const session = await auth.api.getSession();
+const token = session.token; // Use this for API calls
+```
+
+```typescript TypeScript Example
+import { authClient } from "@/lib/auth-client";
+
+const { data: session } = await authClient.getSession();
+if (session?.token) {
+  // Use session.token for API authentication
+  const apiToken = session.token;
+}
+```
+</CodeGroup>
+
+### 2. Test User Accounts
+
+For local development, use these seeded test accounts:
+
+| Email | Role | Password |
+|-------|------|----------|
+| `admin@example.com` | Admin | `password1234` |
+| `manager@example.com` | Manager | `password1234` |
+| `reviewer1@example.com` | Reviewer | `password1234` |
+| `reviewer2@example.com` | Reviewer | `password1234` |
+| `requester@example.com` | Requester | `password1234` |
+
+<Warning>
+  Test accounts are for local development only. Never use these credentials in production environments.
+</Warning>
+
+## Making Authenticated Requests
+
+Include the JWT token in the `Authorization` header using the `Bearer` scheme:
+
+### HTTP Header Format
+
+```http
+Authorization: Bearer YOUR_JWT_TOKEN
+```
+
+### cURL Example
+
+```bash
+curl -X GET http://localhost:8000/api/v1/me \
+  -H "Authorization: Bearer eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9..."
+```
+
+### JavaScript Example
+
+```javascript
+const response = await fetch('http://localhost:8000/api/v1/me', {
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  }
+});
+
+const user = await response.json();
+console.log(user);
+```
+
+### Python Example
+
+```python
+import requests
+
+token = "eyJhbGciOiJFZERTQSIsInR5cCI6IkpXVCJ9..."
+headers = {
+    "Authorization": f"Bearer {token}",
+    "Content-Type": "application/json"
+}
+
+response = requests.get(
+    "http://localhost:8000/api/v1/me",
+    headers=headers
+)
+
+user = response.json()
+print(user)
+```
+
+## JWT Verification Process
+
+The FastAPI backend verifies tokens using Better Auth's JWKS endpoint:
+
+### Verification Steps
+
+1. **Extract Token** - Parse bearer token from `Authorization` header
+2. **Fetch Signing Key** - Retrieve public key from JWKS URL
+3. **Verify Signature** - Validate JWT signature using EdDSA/RS256/ES256
+4. **Check Claims** - Verify `iss` (issuer) and `aud` (audience)
+5. **Extract Subject** - Get user ID from `sub` claim
+6. **Return User Context** - Create `AuthenticatedUser` object
+
+### Implementation (`api/auth.py`)
+
+```python
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer
+import jwt
+
+security = HTTPBearer(auto_error=False)
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(security),
+    settings: Settings = Depends(get_settings),
+) -> AuthenticatedUser:
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing bearer token.",
+        )
+    
+    token = credentials.credentials
+    
+    try:
+        signing_key = get_jwks_client(settings).get_signing_key_from_jwt(token)
+        payload = jwt.decode(
+            token,
+            signing_key.key,
+            algorithms=["EdDSA", "RS256", "ES256"],
+            audience=settings.better_auth_audience,
+            issuer=settings.better_auth_issuer,
+        )
+    except jwt.PyJWTError as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Invalid Better Auth token: {error}",
+        ) from error
+    
+    subject = payload.get("sub")
+    if not isinstance(subject, str) or not subject:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Better Auth token is missing the subject claim.",
+        )
+    
+    email = payload.get("email")
+    return AuthenticatedUser(
+        user_id=subject,
+        email=email if isinstance(email, str) else None,
+        payload=payload,
+    )
+```
+
+## JWT Token Structure
+
+Better Auth JWT tokens contain standard claims:
+
+### Token Payload
+
+```json
+{
+  "sub": "user-uuid-here",
+  "email": "user@example.com",
+  "iss": "http://localhost:3000",
+  "aud": "http://localhost:3000",
+  "iat": 1678901234,
+  "exp": 1678987634
+}
+```
+
+### Claim Descriptions
+
+| Claim | Description | Required |
+|-------|-------------|----------|
+| `sub` | User ID (UUID) - identifies the authenticated user | Yes |
+| `email` | User's email address | No |
+| `iss` | Token issuer - must match `BETTER_AUTH_ISSUER` | Yes |
+| `aud` | Token audience - must match `BETTER_AUTH_AUDIENCE` | Yes |
+| `iat` | Issued at timestamp | Yes |
+| `exp` | Expiration timestamp | Yes |
+
+## Configuration
+
+The API requires these environment variables for Better Auth integration:
+
+### Environment Variables (`apps/api/.env`)
+
+```bash
+BETTER_AUTH_ISSUER=http://localhost:3000
+BETTER_AUTH_AUDIENCE=http://localhost:3000
+BETTER_AUTH_JWKS_URL=http://localhost:3000/api/auth/jwks
+```
+
+### Settings Class (`api/config.py`)
+
+```python
+class Settings(BaseSettings):
+    better_auth_issuer: str = "http://localhost:3000"
+    better_auth_audience: str = "http://localhost:3000"
+    better_auth_jwks_url: str = "http://localhost:3000/api/auth/jwks"
+```
+
+<Info>
+  In production, update these URLs to match your deployed Next.js application domain.
+</Info>
+
+## Token Expiration and Refresh
+
+Better Auth tokens have a limited lifetime (typically 24 hours):
+
+### Checking Token Expiration
+
+```javascript
+function isTokenExpired(token) {
+  const payload = JSON.parse(atob(token.split('.')[1]));
+  const expirationTime = payload.exp * 1000; // Convert to milliseconds
+  return Date.now() >= expirationTime;
+}
+```
+
+### Handling Expired Tokens
+
+When a token expires, the API returns a 401 error:
+
+```json
+{
+  "detail": "Invalid Better Auth token: Signature has expired"
+}
+```
+
+**Solution**: Re-authenticate through the Next.js web app to obtain a fresh token.
+
+<Note>
+  Automatic token refresh is handled by the Better Auth client in the Next.js application. API clients should implement retry logic to request new tokens when they expire.
+</Note>
+
+## Checking Current User
+
+Verify your authentication by calling the `/api/v1/me` endpoint:
+
+### Request
+
+```bash
+curl -X GET http://localhost:8000/api/v1/me \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+### Response
+
+```json
+{
+  "userId": "550e8400-e29b-41d4-a716-446655440000",
+  "email": "admin@example.com",
+  "claims": {
+    "sub": "550e8400-e29b-41d4-a716-446655440000",
+    "email": "admin@example.com",
+    "iss": "http://localhost:3000",
+    "aud": "http://localhost:3000",
+    "iat": 1678901234,
+    "exp": 1678987634
+  }
+}
+```
+
+## Authentication Errors
+
+The API returns specific error messages for authentication failures:
+
+### Missing Token
+
+```json
+{
+  "detail": "Missing bearer token."
+}
+```
+
+**Status Code**: `401 Unauthorized`
+
+### Invalid Signature
+
+```json
+{
+  "detail": "Invalid Better Auth token: Signature verification failed"
+}
+```
+
+**Status Code**: `401 Unauthorized`
+
+### Missing Subject Claim
+
+```json
+{
+  "detail": "Better Auth token is missing the subject claim."
+}
+}
+```
+
+**Status Code**: `401 Unauthorized`
+
+### Wrong Issuer/Audience
+
+```json
+{
+  "detail": "Invalid Better Auth token: Invalid issuer"
+}
+```
+
+**Status Code**: `401 Unauthorized`
+
+## Security Best Practices
+
+<Warning>
+  **Never expose JWT tokens in URLs, logs, or client-side storage that can be accessed by third parties.**
+</Warning>
+
+### Recommendations
+
+1. **Use HTTPS** - Always use HTTPS in production to prevent token interception
+2. **Store Securely** - Use `httpOnly` cookies or secure storage mechanisms
+3. **Short Expiration** - Keep token lifetimes short (hours, not days)
+4. **Validate Claims** - Always verify `iss`, `aud`, and `exp` claims
+5. **Rotate Keys** - Better Auth automatically manages key rotation via JWKS
+6. **Don't Log Tokens** - Never log JWT tokens in application logs
+
+## Workflow Authorization
+
+After authentication, the API uses the user ID for workflow-specific authorization:
+
+- **Task Assignment** - Only assigned users can approve/reject tasks
+- **Workflow Ownership** - Users can only access workflows they created or are assigned to
+- **Action Audit** - All actions record the `actor_user_id` from the JWT
+
+### Example: Task Action Authorization
+
+```python
+def _current_user_matches_task(user: AuthenticatedUser, task_row) -> bool:
+    if task_row["assigned_user_id"] == user.user_id:
+        return True
+    if task_row["assigned_user_email"] == user.email:
+        return True
+    return False
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Overview" icon="book" href="/api/overview">
+    Explore available endpoints and API structure
+  </Card>
+  
+  <Card title="Workflow Instances" icon="play" href="/api/instances/start">
+    Start your first workflow with authenticated requests
+  </Card>
+</CardGroup>

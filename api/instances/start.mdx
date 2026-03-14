@@ -1,0 +1,332 @@
+---
+title: "Start Workflow Instance"
+description: "Create and start a new workflow instance"
+---
+
+Create and immediately start a new workflow instance. This endpoint initializes the workflow, creates the first step instance, and begins execution. For workflows that start with a human task, the appropriate tasks will be created and assigned.
+
+## Endpoint
+
+```
+POST /api/v1/workflow-instances
+```
+
+## Authentication
+
+<Note>
+  This endpoint requires authentication. Include a valid Bearer token in the Authorization header.
+</Note>
+
+## Request Body
+
+<ParamField body="workflowDefinitionId" type="UUID">
+  The unique identifier of the workflow definition to start. Either `workflowDefinitionId` or `workflowKey` must be provided.
+</ParamField>
+
+<ParamField body="workflowKey" type="string">
+  The unique key of the workflow definition to start. Either `workflowDefinitionId` or `workflowKey` must be provided.
+</ParamField>
+
+<ParamField body="businessKey" type="string">
+  Optional business identifier for this workflow instance (e.g., order number, ticket ID). If provided with the same workflow definition, the `runNumber` will increment automatically for retry scenarios.
+</ParamField>
+
+<ParamField body="inputData" type="object" default="{}">
+  Initial input data for the workflow. This data is available throughout workflow execution and is immutable.
+</ParamField>
+
+<ParamField body="contextData" type="object" default="{}">
+  Initial context data for the workflow. Context data can be modified as the workflow progresses through steps and is used to pass data between steps.
+</ParamField>
+
+<Note>
+  Either `workflowDefinitionId` or `workflowKey` must be provided, but not both. The system will use the latest published version of the workflow definition, or the latest version if no published version exists.
+</Note>
+
+### Example Request
+
+```bash
+curl -X POST https://api.example.com/api/v1/workflow-instances \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "workflowKey": "expense-approval",
+    "businessKey": "EXP-2024-001",
+    "inputData": {
+      "expenseAmount": 1500.00,
+      "category": "travel",
+      "description": "Flight to conference",
+      "receipts": ["receipt_001.pdf"]
+    },
+    "contextData": {
+      "expenseAmount": 1500.00,
+      "category": "travel",
+      "submittedBy": "user_123"
+    }
+  }'
+```
+
+## Response
+
+Returns the created workflow instance with full details.
+
+### Response Schema
+
+<ResponseField name="item" type="object" required>
+  The created workflow instance details
+  
+  <Expandable title="WorkflowInstanceDetail object">
+    <ResponseField name="id" type="UUID" required>
+      Unique identifier for the newly created workflow instance
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionId" type="UUID" required>
+      ID of the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionKey" type="string" required>
+      Unique key of the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="workflowDefinitionName" type="string" required>
+      Human-readable name of the workflow
+    </ResponseField>
+    
+    <ResponseField name="workflowVersionId" type="UUID" required>
+      ID of the workflow version being executed
+    </ResponseField>
+    
+    <ResponseField name="businessKey" type="string">
+      Business identifier provided in the request
+    </ResponseField>
+    
+    <ResponseField name="runNumber" type="integer" required>
+      Run number for this business key (1 for first execution, increments for retries)
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Current workflow status after initialization:
+      - `running` - Workflow is executing automated steps
+      - `waiting` - Workflow is waiting for human task completion
+      - `paused` - Workflow is waiting for subworkflow completion
+      - `completed` - Workflow completed immediately (rare, for trivial workflows)
+    </ResponseField>
+    
+    <ResponseField name="currentStepCode" type="string">
+      Code of the current step
+    </ResponseField>
+    
+    <ResponseField name="currentStepLabel" type="string">
+      Label of the current step
+    </ResponseField>
+    
+    <ResponseField name="startedBy" type="string" required>
+      User ID of the authenticated user who started the workflow
+    </ResponseField>
+    
+    <ResponseField name="startedAt" type="string" required>
+      ISO 8601 timestamp when the workflow was started
+    </ResponseField>
+    
+    <ResponseField name="completedAt" type="string">
+      ISO 8601 timestamp when workflow completed (null for running workflows)
+    </ResponseField>
+    
+    <ResponseField name="inputData" type="object" required>
+      Input data as provided in the request
+    </ResponseField>
+    
+    <ResponseField name="contextData" type="object" required>
+      Current context data (initially same as inputData)
+    </ResponseField>
+    
+    <ResponseField name="outputData" type="object" required>
+      Output data (empty until workflow completes)
+    </ResponseField>
+    
+    <ResponseField name="graphJson" type="object" required>
+      Workflow graph structure
+    </ResponseField>
+    
+    <ResponseField name="builderLayout" type="object" required>
+      Visual layout information
+    </ResponseField>
+    
+    <ResponseField name="steps" type="array" required>
+      Array of step instances created during initialization (typically includes start step and first active step)
+    </ResponseField>
+    
+    <ResponseField name="actions" type="array" required>
+      Array of actions recorded (includes the initial "start" action)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "item": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "workflowDefinitionId": "660e8400-e29b-41d4-a716-446655440001",
+    "workflowDefinitionKey": "expense-approval",
+    "workflowDefinitionName": "Expense Approval Workflow",
+    "workflowVersionId": "770e8400-e29b-41d4-a716-446655440002",
+    "businessKey": "EXP-2024-001",
+    "runNumber": 1,
+    "status": "waiting",
+    "currentStepCode": "manager_review",
+    "currentStepLabel": "Manager Review",
+    "startedBy": "user_123",
+    "startedAt": "2024-01-15T10:30:00Z",
+    "completedAt": null,
+    "inputData": {
+      "expenseAmount": 1500.00,
+      "category": "travel",
+      "description": "Flight to conference",
+      "receipts": ["receipt_001.pdf"]
+    },
+    "contextData": {
+      "expenseAmount": 1500.00,
+      "category": "travel",
+      "submittedBy": "user_123"
+    },
+    "outputData": {},
+    "graphJson": {
+      "nodes": [
+        {"id": "start", "type": "start"},
+        {"id": "manager_review", "type": "human_task"}
+      ],
+      "edges": [
+        {"from": "start", "to": "manager_review"}
+      ]
+    },
+    "builderLayout": {},
+    "steps": [
+      {
+        "id": "880e8400-e29b-41d4-a716-446655440010",
+        "stepCode": "start",
+        "stepLabel": "Start",
+        "stepType": "start",
+        "status": "completed",
+        "visitCount": 1,
+        "enteredAt": "2024-01-15T10:30:00Z",
+        "completedAt": "2024-01-15T10:30:00Z",
+        "waitingSince": null,
+        "resultAction": "approve"
+      },
+      {
+        "id": "880e8400-e29b-41d4-a716-446655440011",
+        "stepCode": "manager_review",
+        "stepLabel": "Manager Review",
+        "stepType": "human_task",
+        "status": "waiting",
+        "visitCount": 1,
+        "enteredAt": "2024-01-15T10:30:00Z",
+        "completedAt": null,
+        "waitingSince": "2024-01-15T10:30:00Z",
+        "resultAction": null
+      }
+    ],
+    "actions": [
+      {
+        "id": "990e8400-e29b-41d4-a716-446655440020",
+        "actionType": "start",
+        "actionCode": null,
+        "actorUserId": "user_123",
+        "actorType": "user",
+        "remarkText": null,
+        "payload": {
+          "workflowDefinitionKey": "expense-approval",
+          "businessKey": "EXP-2024-001"
+        },
+        "createdAt": "2024-01-15T10:30:00Z"
+      }
+    ]
+  }
+}
+```
+
+## Workflow Execution Flow
+
+When a workflow instance is started, the following occurs:
+
+1. **Version Resolution**: The system selects the appropriate workflow version (latest published, or latest draft if none published)
+
+2. **Instance Creation**: A new workflow instance record is created with status `running`
+
+3. **Data Initialization**: Input and context data are stored in the workflow instance
+
+4. **Action Recording**: A "start" action is recorded in the workflow history
+
+5. **Status History**: Initial status change is logged (null → running)
+
+6. **Step Execution**: The workflow enters the start step and begins executing:
+   - **Start steps**: Immediately transition to the next step
+   - **Human task steps**: Create and assign tasks to users/roles/groups, set workflow to `waiting`
+   - **Subworkflow steps**: Launch child workflow, set parent to `paused`
+   - **End steps**: Mark workflow as `completed` or `rejected`
+
+7. **Notification**: For human tasks, notifications are created and sent to assigned users
+
+8. **Response**: The fully initialized workflow instance is returned
+
+## Error Responses
+
+<ResponseField name="401 Unauthorized">
+  Authentication token is missing or invalid.
+  
+  ```json
+  {
+    "detail": "Not authenticated"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="404 Not Found">
+  Workflow definition with the specified ID or key does not exist.
+  
+  ```json
+  {
+    "detail": "Workflow definition not found."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="422 Unprocessable Entity">
+  Request validation failed. Common causes:
+  - Neither `workflowDefinitionId` nor `workflowKey` provided
+  - Workflow version has no start step
+  - Invalid data format
+  
+  ```json
+  {
+    "detail": "workflowDefinitionId or workflowKey is required."
+  }
+  ```
+  
+  ```json
+  {
+    "detail": "Workflow version has no start step."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="500 Internal Server Error">
+  An unexpected server error occurred.
+  
+  ```json
+  {
+    "detail": "Internal server error"
+  }
+  ```
+</ResponseField>
+
+## Use Cases
+
+- Start a new approval workflow for an expense report
+- Initiate an onboarding workflow for a new employee
+- Launch a document review process
+- Trigger automated business processes
+- Integrate workflows into external applications
+- Retry failed workflows with a new run number

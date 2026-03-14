@@ -1,0 +1,402 @@
+---
+title: "Get Workflow Definition"
+description: "Retrieve detailed information about a specific workflow definition"
+---
+
+## Overview
+
+Retrieve complete details of a workflow definition including all steps, transitions, assignment policies, and configuration.
+
+## Endpoint
+
+```
+GET /api/v1/workflow-definitions/{definition_id}
+```
+
+## Authentication
+
+This endpoint requires authentication. Include a valid authentication token in your request.
+
+## Path Parameters
+
+<ParamField path="definition_id" type="string (UUID)" required>
+  The unique identifier of the workflow definition to retrieve
+</ParamField>
+
+## Response
+
+Returns complete workflow definition details.
+
+<ResponseField name="id" type="string (UUID)" required>
+  Unique identifier for the workflow definition
+</ResponseField>
+
+<ResponseField name="key" type="string" required>
+  Unique key for the workflow definition
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Display name of the workflow definition
+</ResponseField>
+
+<ResponseField name="description" type="string" required>
+  Description of the workflow definition
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current status of the workflow (e.g., "draft", "active")
+</ResponseField>
+
+<ResponseField name="latestVersionId" type="string (UUID)" required>
+  ID of the latest version
+</ResponseField>
+
+<ResponseField name="latestVersionNo" type="integer" required>
+  Version number of the latest version
+</ResponseField>
+
+<ResponseField name="graphJson" type="object" required>
+  Graph representation of the workflow structure
+</ResponseField>
+
+<ResponseField name="builderLayout" type="object" required>
+  Visual layout configuration for the workflow builder UI
+</ResponseField>
+
+<ResponseField name="steps" type="array" required>
+  Array of workflow step definitions
+  
+  <Expandable title="WorkflowStepResponse">
+    <ResponseField name="id" type="string (UUID)" required>
+      Unique identifier for the step
+    </ResponseField>
+    
+    <ResponseField name="stepCode" type="string" required>
+      Unique code identifying this step within the workflow
+    </ResponseField>
+    
+    <ResponseField name="stepLabel" type="string" required>
+      Display label for the step
+    </ResponseField>
+    
+    <ResponseField name="description" type="string" required>
+      Description of what this step does
+    </ResponseField>
+    
+    <ResponseField name="stepType" type="string" required>
+      Type of step: "start", "end", "human_task", "system_task", "subworkflow", or "decision"
+    </ResponseField>
+    
+    <ResponseField name="sequenceHint" type="integer | null" required>
+      Ordering hint for displaying steps
+    </ResponseField>
+    
+    <ResponseField name="allowRevert" type="boolean" required>
+      Whether this step can be reverted
+    </ResponseField>
+    
+    <ResponseField name="remarkRequiredOnApprove" type="boolean" required>
+      Whether a remark is required when approving
+    </ResponseField>
+    
+    <ResponseField name="remarkRequiredOnReject" type="boolean" required>
+      Whether a remark is required when rejecting
+    </ResponseField>
+    
+    <ResponseField name="remarkRequiredOnRevert" type="boolean" required>
+      Whether a remark is required when reverting
+    </ResponseField>
+    
+    <ResponseField name="maxVisitsPerInstance" type="integer | null" required>
+      Maximum number of times this step can be visited in a single workflow instance (used to prevent infinite loops)
+    </ResponseField>
+    
+    <ResponseField name="formSchema" type="object" required>
+      JSON schema defining the form for this step
+    </ResponseField>
+    
+    <ResponseField name="config" type="object" required>
+      Additional configuration for this step
+    </ResponseField>
+    
+    <ResponseField name="isTerminal" type="boolean" required>
+      Whether this step terminates the workflow
+    </ResponseField>
+    
+    <ResponseField name="notificationTemplate" type="object | null" required>
+      Notification template for task creation events
+      
+      <Expandable title="NotificationTemplate">
+        <ResponseField name="id" type="string (UUID)" required>
+          Template ID
+        </ResponseField>
+        
+        <ResponseField name="titleTemplate" type="string" required>
+          Title template with variable substitution
+        </ResponseField>
+        
+        <ResponseField name="bodyTemplate" type="string" required>
+          Body template with variable substitution
+        </ResponseField>
+        
+        <ResponseField name="allowActorOverride" type="boolean" required>
+          Whether actors can customize the notification
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="subworkflowMapping" type="object | null" required>
+      Configuration for subworkflow steps
+      
+      <Expandable title="SubworkflowMapping">
+        <ResponseField name="id" type="string (UUID)" required>
+          Mapping ID
+        </ResponseField>
+        
+        <ResponseField name="childWorkflowDefinitionId" type="string (UUID)" required>
+          ID of the child workflow definition
+        </ResponseField>
+        
+        <ResponseField name="childWorkflowVersionId" type="string (UUID) | null" required>
+          Specific version ID of the child workflow
+        </ResponseField>
+        
+        <ResponseField name="triggerMode" type="string" required>
+          Trigger mode: "sync_wait" or "async_wait"
+        </ResponseField>
+        
+        <ResponseField name="inputMapping" type="object" required>
+          Mapping of parent workflow data to child workflow input
+        </ResponseField>
+        
+        <ResponseField name="outputMapping" type="object" required>
+          Mapping of child workflow output to parent workflow data
+        </ResponseField>
+        
+        <ResponseField name="completionAction" type="string" required>
+          Action type to execute on completion: "approve", "reject", "revert", or "custom"
+        </ResponseField>
+        
+        <ResponseField name="failureAction" type="string" required>
+          Action type to execute on failure: "approve", "reject", "revert", or "custom"
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="assignmentPolicy" type="object | null" required>
+      Policy for assigning tasks to users
+      
+      <Expandable title="AssignmentPolicy">
+        <ResponseField name="id" type="string (UUID)" required>
+          Policy ID
+        </ResponseField>
+        
+        <ResponseField name="approvalMode" type="string" required>
+          Approval mode: "priority_chain", "approve_any_one", "approve_all", or "notify_all"
+        </ResponseField>
+        
+        <ResponseField name="requiredApprovalsCount" type="integer | null" required>
+          Number of required approvals
+        </ResponseField>
+        
+        <ResponseField name="priorityEscalationEnabled" type="boolean" required>
+          Whether to enable priority-based escalation
+        </ResponseField>
+        
+        <ResponseField name="escalationTimeoutSeconds" type="integer | null" required>
+          Timeout in seconds before escalating
+        </ResponseField>
+        
+        <ResponseField name="reminderIntervalSeconds" type="integer | null" required>
+          Interval in seconds for sending reminders
+        </ResponseField>
+        
+        <ResponseField name="maxEscalationCount" type="integer | null" required>
+          Maximum number of escalations allowed
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+    
+    <ResponseField name="associations" type="array" required>
+      List of user/role/group associations for this step
+      
+      <Expandable title="StepAssociation">
+        <ResponseField name="id" type="string (UUID)" required>
+          Association ID
+        </ResponseField>
+        
+        <ResponseField name="associationType" type="string" required>
+          Type: "user", "role", "group", or "sql_rule"
+        </ResponseField>
+        
+        <ResponseField name="associationValue" type="string" required>
+          Value identifying the user/role/group
+        </ResponseField>
+        
+        <ResponseField name="canApprove" type="boolean" required>
+          Whether this association can approve
+        </ResponseField>
+        
+        <ResponseField name="canReject" type="boolean" required>
+          Whether this association can reject
+        </ResponseField>
+        
+        <ResponseField name="canRevert" type="boolean" required>
+          Whether this association can revert
+        </ResponseField>
+        
+        <ResponseField name="priority" type="integer | null" required>
+          Priority order for priority_chain mode
+        </ResponseField>
+        
+        <ResponseField name="notificationOrder" type="integer | null" required>
+          Order for sending notifications
+        </ResponseField>
+        
+        <ResponseField name="escalationAfterSeconds" type="integer | null" required>
+          Seconds before escalating to this association
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="transitions" type="array" required>
+  Array of workflow transition definitions
+  
+  <Expandable title="WorkflowTransitionResponse">
+    <ResponseField name="id" type="string (UUID)" required>
+      Unique identifier for the transition
+    </ResponseField>
+    
+    <ResponseField name="fromStepCode" type="string" required>
+      Source step code
+    </ResponseField>
+    
+    <ResponseField name="toStepCode" type="string | null" required>
+      Target step code (null for terminal transitions)
+    </ResponseField>
+    
+    <ResponseField name="actionType" type="string" required>
+      Action triggering this transition: "approve", "reject", "revert", or "custom"
+    </ResponseField>
+    
+    <ResponseField name="actionCode" type="string | null" required>
+      Custom action code (required when actionType is "custom")
+    </ResponseField>
+    
+    <ResponseField name="transitionLabel" type="string" required>
+      Display label for the transition
+    </ResponseField>
+    
+    <ResponseField name="description" type="string" required>
+      Description of the transition
+    </ResponseField>
+    
+    <ResponseField name="conditionExpression" type="string | null" required>
+      Optional condition expression for conditional transitions
+    </ResponseField>
+    
+    <ResponseField name="priority" type="integer" required>
+      Priority for evaluating multiple transitions (lower values evaluated first)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X GET https://api.example.com/api/v1/workflow-definitions/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+## Example Response
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "key": "expense-approval",
+  "name": "Expense Approval Workflow",
+  "description": "Multi-level approval workflow for expense requests",
+  "status": "active",
+  "latestVersionId": "660e8400-e29b-41d4-a716-446655440001",
+  "latestVersionNo": 3,
+  "graphJson": {
+    "workflow": {
+      "key": "expense-approval",
+      "name": "Expense Approval Workflow",
+      "description": "Multi-level approval workflow for expense requests"
+    },
+    "steps": [...],
+    "transitions": [...]
+  },
+  "builderLayout": {
+    "nodes": [...],
+    "edges": [...],
+    "viewport": {"x": 0, "y": 0, "zoom": 1}
+  },
+  "steps": [
+    {
+      "id": "770e8400-e29b-41d4-a716-446655440010",
+      "stepCode": "start",
+      "stepLabel": "Start",
+      "description": "Initial step",
+      "stepType": "start",
+      "sequenceHint": 0,
+      "allowRevert": false,
+      "remarkRequiredOnApprove": false,
+      "remarkRequiredOnReject": false,
+      "remarkRequiredOnRevert": false,
+      "maxVisitsPerInstance": null,
+      "formSchema": {},
+      "config": {},
+      "isTerminal": false,
+      "notificationTemplate": null,
+      "subworkflowMapping": null,
+      "assignmentPolicy": {
+        "id": "880e8400-e29b-41d4-a716-446655440020",
+        "approvalMode": "priority_chain",
+        "requiredApprovalsCount": null,
+        "priorityEscalationEnabled": false,
+        "escalationTimeoutSeconds": null,
+        "reminderIntervalSeconds": null,
+        "maxEscalationCount": null
+      },
+      "associations": []
+    }
+  ],
+  "transitions": [
+    {
+      "id": "990e8400-e29b-41d4-a716-446655440030",
+      "fromStepCode": "start",
+      "toStepCode": "manager_review",
+      "actionType": "approve",
+      "actionCode": null,
+      "transitionLabel": "Submit",
+      "description": "Submit for manager review",
+      "conditionExpression": null,
+      "priority": 0
+    }
+  ]
+}
+```
+
+## Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication token is missing or invalid
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  Workflow definition not found
+  
+  ```json
+  {
+    "detail": "Workflow definition not found."
+  }
+  ```
+</ResponseField>
+
+<Note>
+The response includes the latest version of the workflow definition with all associated steps, transitions, and configuration details.
+</Note>

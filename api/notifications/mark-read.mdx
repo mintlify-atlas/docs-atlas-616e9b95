@@ -1,0 +1,138 @@
+---
+title: "Mark Notification as Read"
+description: "Mark a specific notification as read for the authenticated user"
+---
+
+## Overview
+
+Marks a notification as read by setting the `isRead` flag to `true` and recording the timestamp when it was read. This allows users to track which notifications they have acknowledged.
+
+## Endpoint
+
+```
+POST /api/v1/notifications/{notification_id}/read
+```
+
+## Authentication
+
+<Note>
+This endpoint requires authentication. The authenticated user must be the owner of the notification.
+</Note>
+
+## Path Parameters
+
+<ParamField path="notification_id" type="UUID" required>
+  The unique identifier of the notification to mark as read
+</ParamField>
+
+## Request Body
+
+This endpoint does not require a request body.
+
+## Response
+
+Returns the updated notification object with `isRead` set to `true` and `readAt` populated with the current timestamp.
+
+### Response Schema
+
+<ResponseField name="id" type="UUID" required>
+  Unique identifier for the notification
+</ResponseField>
+
+<ResponseField name="workflowInstanceId" type="UUID">
+  ID of the workflow instance this notification relates to
+</ResponseField>
+
+<ResponseField name="stepInstanceId" type="UUID">
+  ID of the step instance this notification relates to
+</ResponseField>
+
+<ResponseField name="notificationType" type="string" required>
+  Type of notification (e.g., `task_assigned`, `workflow_completed`)
+</ResponseField>
+
+<ResponseField name="title" type="string" required>
+  Notification title
+</ResponseField>
+
+<ResponseField name="body" type="string" required>
+  Notification message body
+</ResponseField>
+
+<ResponseField name="isRead" type="boolean" required>
+  Set to `true` after marking as read
+</ResponseField>
+
+<ResponseField name="readAt" type="string" required>
+  ISO 8601 timestamp when the notification was marked as read
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 timestamp when the notification was created
+</ResponseField>
+
+## Example Request
+
+```bash cURL
+curl -X POST https://api.example.com/api/v1/notifications/550e8400-e29b-41d4-a716-446655440001/read \
+  -H "Authorization: Bearer YOUR_AUTH_TOKEN"
+```
+
+## Example Response
+
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440001",
+  "workflowInstanceId": "550e8400-e29b-41d4-a716-446655440100",
+  "stepInstanceId": "550e8400-e29b-41d4-a716-446655440200",
+  "notificationType": "task_assigned",
+  "title": "Action required: Approve Budget Request",
+  "body": "The workflow 'Budget Approval Process' is waiting for your action.",
+  "isRead": true,
+  "readAt": "2024-01-15T11:00:00Z",
+  "createdAt": "2024-01-15T10:30:00Z"
+}
+```
+
+## Error Responses
+
+<ResponseField name="401 Unauthorized">
+  Authentication token is missing or invalid
+  
+  ```json
+  {
+    "detail": "Unauthorized"
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="404 Not Found">
+  Notification not found or does not belong to the authenticated user
+  
+  ```json
+  {
+    "detail": "Notification not found."
+  }
+  ```
+</ResponseField>
+
+## Important Notes
+
+<Note>
+- Only the owner of the notification can mark it as read
+- The `readAt` timestamp is automatically set to the current server time
+- Marking a notification as read is idempotent - calling this endpoint multiple times will not change the `readAt` timestamp after the first call
+- The notification must belong to the authenticated user, otherwise a 404 error is returned
+</Note>
+
+## Use Cases
+
+- Mark notifications as read when a user views them in the UI
+- Track which notifications a user has acknowledged
+- Implement a "mark all as read" feature by calling this endpoint for each unread notification
+- Update notification counts in real-time after marking as read
+
+## Related Endpoints
+
+- [List My Notifications](/api/notifications/list) - Retrieve all notifications for the current user
+- [List My Tasks](/api/tasks/list) - View tasks that triggered notifications

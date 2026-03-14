@@ -1,0 +1,500 @@
+---
+title: Execution Model
+description: Step-by-step flow of how workflows execute in the Workflow Engine Platform
+---
+
+This page explains how workflows execute from start to completion, including step entry, task creation, transitions, and subworkflow handling.
+
+## High-Level Flow
+
+1. **Start workflow instance** from a published version
+2. **Enter start step** and create step instance
+3. **Execute step** based on type:
+   - **Automatic**: Complete immediately and advance
+   - **Human task**: Create tasks, pause, wait for action
+   - **Subworkflow**: Start child workflow, pause parent
+4. **Resolve transition** based on action taken
+5. **Enter next step** and repeat until terminal
+
+## Step Types
+
+The engine supports these step types:
+
+| Type | Behavior | Use Case |
+|------|----------|----------|
+| `start` | Entry point, advances immediately | Workflow initialization |
+| `end` | Terminal step, completes workflow | Successful completion |
+| `human_task` | Pauses and waits for user action | Approvals, reviews, decisions |
+| `system_task` | Executes worker logic automatically | API calls, data transforms |
+| `subworkflow` | Starts child workflow, pauses parent | Nested approval flows |
+| `decision` | Conditional branching | Route based on data |
+
+## Starting a Workflow
+
+Implemented in `apps/api/src/api/runtime.py:1065`
+
+```python
+@router.post("/api/v1/workflow-instances")
+def start_workflow_instance(payload, user):
+    # 1. Resolve published version
+    version = _resolve_version(cursor, workflow_key=payload.workflowKey)
+    
+    # 2. Create workflow instance
+    cursor.execute(
+        "INSERT INTO workflow_instance (workflow_version_id, status, started_by) "
+        "VALUES (%s, 'running', %s) RETURNING *",
+        (version["id"], user.user_id)
+    )
+    workflow_instance = cursor.fetchone()
+    
+    # 3. Store input and context data
+    cursor.execute(
+        "INSERT INTO workflow_instance_data (workflow_instance_id, input_data, context_data) "
+        "VALUES (%s, %s, %s)",
+        (workflow_instance["id"], Json(payload.inputData), Json(payload.contextData))
+    )
+    
+    # 4. Record start action
+    cursor.execute(
+        "INSERT INTO workflow_action (workflow_instance_id, action_type, actor_user_id, actor_type) "
+        "VALUES (%s, 'start', %s, 'user')",
+        (workflow_instance["id"], user.user_id)
+    )
+    
+    # 5. Enter start step
+    start_step = _get_start_step(cursor, version["id"])
+    _enter_step(cursor, workflow_instance, start_step, "approve")
+    
+    connection.commit()
+```
+
+## Entering a Step
+
+Implemented in `apps/api/src/api/runtime.py:837`
+
+```python
+def _enter_step(cursor, workflow_instance, step_definition, trigger_action):
+    # 1. Calculate visit count (supports revisits after revert)
+    visit_count = _get_next_visit_count(cursor, workflow_instance["id"], step_definition["id"])
+    
+    # 2. Create step instance
+    cursor.execute(
+        "INSERT INTO step_instance (workflow_instance_id, step_definition_id, visit_count, status) "
+        "VALUES (%s, %s, %s, 'active') RETURNING *",
+        (workflow_instance["id"], step_definition["id"], visit_count)
+    )
+    step_instance = cursor.fetchone()
+    
+    # 3. Update workflow current step pointer
+    cursor.execute(
+        "UPDATE workflow_instance SET current_step_instance_id = %s WHERE id = %s",
+        (step_instance["id"], workflow_instance["id"])
+    )
+    
+    # 4. Execute based on step type
+    if step_definition["step_type"] == "end" or step_definition["is_terminal"]:
+        _complete_workflow(cursor, workflow_instance, step_instance, trigger_action)
+    
+    elif step_definition["step_type"] == "human_task":
+        _create_human_tasks(cursor, workflow_instance, step_instance, step_definition)
+    
+    elif step_definition["step_type"] == "subworkflow":
+        _start_child_workflow(cursor, workflow_instance, step_instance, mapping)
+    
+    else:
+        # System task: auto-complete and transition
+        _auto_complete_step(cursor, workflow_instance, step_instance)
+```
+
+## Human Task Creation
+
+Implemented in `apps/api/src/api/runtime.py:355`
+
+When a workflow reaches a human task step:
+
+1. **Load assignment policy** from step definition
+2. **Resolve assignees** (users, roles, groups)
+3. **Create task rows** for each assignee
+4. **Apply approval mode** to determine task status:
+   - `priority_chain`: Only first task is `open`, rest are `queued`
+   - `approve_any_one`: All tasks are `open`
+   - `approve_all`: All tasks are `open`
+5. **Render notifications** using templates
+6. **Write to outbox** for async delivery
+7. **Update workflow status** to `waiting`
+
+```python
+def _create_human_tasks(cursor, workflow_instance, step_instance, step_definition):
+    # Load policy and associations
+    policy = _get_assignment_policy(cursor, step_definition["id"])
+    associations = _get_associations(cursor, step_definition["id"])
+    
+    approval_mode = policy["approval_mode"]  # priority_chain, approve_any_one, approve_all
+    
+    # Resolve actual users from associations
+    resolved_assignees = _resolve_task_assignees(cursor, associations)
+    
+    # Create task for each assignee
+    for index, assignee in enumerate(resolved_assignees):
+        task_status = "open" if (
+            approval_mode in {"approve_any_one", "approve_all"} or index == 0
+        ) else "queued"
+        
+        cursor.execute(
+            "INSERT INTO human_task (workflow_instance_id, step_instance_id, "
+            "assigned_user_id, approval_mode_snapshot, status, sequence_no) "
+            "VALUES (%s, %s, %s, %s, %s, %s) RETURNING id",
+            (workflow_instance["id"], step_instance["id"], 
+             assignee["user_id"], approval_mode, task_status, index + 1)
+        )
+        task_id = cursor.fetchone()["id"]
+        
+        # Create notification if task is open
+        if task_status == "open":
+            _create_notification(cursor, assignee["user_id"], 
+                                workflow_instance["id"], step_instance["id"],
+                                "task_assigned", title, body)
+    
+    # Update workflow to waiting
+    cursor.execute(
+        "UPDATE workflow_instance SET status = 'waiting' WHERE id = %s",
+        (workflow_instance["id"],)
+    )
+```
+
+## Approval Modes
+
+### Priority Chain
+
+Notify assignees sequentially by priority:
+
+```
+Assignees: [manager (priority=1), director (priority=2), vp (priority=3)]
+
+Initial state:
+- manager task: open
+- director task: queued (escalation_due_at = now + timeout)
+- vp task: queued (escalation_due_at = now + 2*timeout)
+
+When manager approves:
+- director task: remains queued (released by background worker)
+- vp task: cancelled
+
+If manager times out:
+- director task: open (released by worker)
+- vp task: still queued
+```
+
+### Approve Any One
+
+All assignees notified, first to approve wins:
+
+```
+Assignees: [alice, bob, charlie]
+
+Initial state:
+- alice task: open
+- bob task: open
+- charlie task: open
+
+When bob approves:
+- bob task: completed
+- alice task: cancelled
+- charlie task: cancelled
+```
+
+### Approve All
+
+All assignees must approve:
+
+```
+Assignees: [finance, legal, security]
+
+Initial state:
+- finance task: open
+- legal task: open
+- security task: open
+
+When finance approves:
+- finance task: completed
+- legal task: still open
+- security task: still open
+- Workflow: still waiting
+
+When legal approves:
+- legal task: completed
+- security task: still open
+- Workflow: still waiting
+
+When security approves:
+- security task: completed
+- Workflow: transitions to next step
+```
+
+## Taking Action on a Task
+
+Implemented in `apps/api/src/api/runtime.py:1520`
+
+```python
+@router.post("/api/v1/human-tasks/{task_id}/approve")
+def approve_human_task(task_id, payload, user):
+    # 1. Fetch task with definition and workflow info
+    task = _fetch_task_for_action(cursor, task_id)
+    
+    # 2. Validate user is assigned
+    if task["assigned_user_id"] != user.user_id:
+        raise HTTPException(403, "Not assigned to this task")
+    
+    # 3. Check remark requirement
+    if task["remark_required_on_approve"] and not payload.remark:
+        raise HTTPException(422, "Remark required")
+    
+    # 4. Record action in audit trail
+    cursor.execute(
+        "INSERT INTO workflow_action (workflow_instance_id, step_instance_id, "
+        "action_type, actor_user_id, remark_text) VALUES (%s, %s, 'approve', %s, %s)",
+        (task["workflow_instance_id"], task["step_instance_id"], 
+         user.user_id, payload.remark)
+    )
+    
+    # 5. Complete task
+    cursor.execute(
+        "UPDATE human_task SET status = 'completed', completed_at = now() WHERE id = %s",
+        (task_id,)
+    )
+    
+    # 6. Check if workflow should advance
+    if task["approval_mode_snapshot"] == "approve_all":
+        # Check if other tasks remain
+        cursor.execute(
+            "SELECT COUNT(*) FROM human_task "
+            "WHERE step_instance_id = %s AND status IN ('open', 'queued')",
+            (task["step_instance_id"],)
+        )
+        if cursor.fetchone()["count"] > 0:
+            return  # Wait for other approvals
+    
+    # 7. Cancel other tasks
+    cursor.execute(
+        "UPDATE human_task SET status = 'cancelled' "
+        "WHERE step_instance_id = %s AND id != %s AND status IN ('open', 'queued')",
+        (task["step_instance_id"], task_id)
+    )
+    
+    # 8. Resolve transition
+    transition = _get_transition(cursor, task["step_definition_id"], "approve")
+    
+    # 9. Complete step
+    cursor.execute(
+        "UPDATE step_instance SET status = 'completed', result_action = 'approve' "
+        "WHERE id = %s",
+        (task["step_instance_id"],)
+    )
+    
+    # 10. Advance to next step
+    if transition and transition["to_step_definition_id"]:
+        next_step = _get_step_by_id(cursor, transition["to_step_definition_id"])
+        _enter_step(cursor, workflow_instance, next_step, "approve")
+    else:
+        _complete_workflow(cursor, workflow_instance, step_instance, "approve")
+    
+    connection.commit()
+```
+
+## Transition Resolution
+
+Implemented in `apps/api/src/api/runtime.py:585`
+
+Transitions are resolved by matching:
+1. **From step**: Current step definition ID
+2. **Action type**: `approve`, `reject`, `revert`, or `custom`
+3. **Action code**: For custom actions only
+4. **Condition**: Optional expression on workflow variables
+
+```python
+def _transition_for_action(cursor, workflow_version_id, from_step_id, action_type, action_code):
+    # Get all transitions for this step and action
+    cursor.execute(
+        "SELECT * FROM workflow_transition_definition "
+        "WHERE workflow_version_id = %s AND from_step_definition_id = %s "
+        "AND action_type = %s ORDER BY priority",
+        (workflow_version_id, from_step_id, action_type)
+    )
+    transitions = cursor.fetchall()
+    
+    # For custom actions, match by action_code
+    if action_type == "custom" and action_code:
+        for t in transitions:
+            if t["action_code"] == action_code:
+                return t
+        return None
+    
+    # Return first matching transition (highest priority)
+    return transitions[0] if transitions else None
+```
+
+## Subworkflow Execution
+
+Implemented in `apps/api/src/api/runtime.py:620`
+
+When a step has type `subworkflow`:
+
+1. **Pause parent workflow** (status = `paused`)
+2. **Map input data** from parent context to child input
+3. **Start child workflow instance**
+4. **Create subworkflow_link** for traceability
+5. **Wait** until child completes
+
+When child completes:
+
+1. **Map output data** from child to parent context
+2. **Resume parent workflow** (status = `running`)
+3. **Apply completion/failure action** as transition
+4. **Advance parent** to next step
+
+```python
+def _start_child_workflow_instance(cursor, parent_instance, parent_step, mapping):
+    # 1. Pause parent
+    cursor.execute(
+        "UPDATE workflow_instance SET status = 'paused' WHERE id = %s",
+        (parent_instance["id"],)
+    )
+    
+    # 2. Map input
+    parent_context = _get_context_data(cursor, parent_instance["id"])
+    child_input = _apply_input_mapping(mapping["input_mapping"], parent_context)
+    
+    # 3. Create child instance
+    child_version = _resolve_version(cursor, mapping["child_workflow_definition_id"])
+    cursor.execute(
+        "INSERT INTO workflow_instance (workflow_version_id, status, "
+        "parent_workflow_instance_id, parent_step_instance_id) "
+        "VALUES (%s, 'running', %s, %s) RETURNING *",
+        (child_version["id"], parent_instance["id"], parent_step["id"])
+    )
+    child_instance = cursor.fetchone()
+    
+    # 4. Link parent and child
+    cursor.execute(
+        "INSERT INTO subworkflow_link (parent_workflow_instance_id, "
+        "parent_step_instance_id, child_workflow_instance_id, link_status) "
+        "VALUES (%s, %s, %s, 'running')",
+        (parent_instance["id"], parent_step["id"], child_instance["id"])
+    )
+    
+    # 5. Start child workflow
+    start_step = _get_start_step(cursor, child_version["id"])
+    _enter_step(cursor, child_instance, start_step, "approve")
+
+def _resume_parent_from_child(cursor, child_instance, child_result_action):
+    # 1. Get child output
+    child_output = _get_output_data(cursor, child_instance["id"])
+    
+    # 2. Map to parent context
+    mapping = _get_mapping(cursor, parent_step["step_definition_id"])
+    parent_context = _get_context_data(cursor, parent_instance["id"])
+    updated_context = _apply_output_mapping(mapping["output_mapping"], 
+                                           child_output, parent_context)
+    cursor.execute(
+        "UPDATE workflow_instance_data SET context_data = %s WHERE workflow_instance_id = %s",
+        (Json(updated_context), parent_instance["id"])
+    )
+    
+    # 3. Complete parent step
+    action = mapping["completion_action"] if child_result_action == "approve" \
+             else mapping["failure_action"]
+    cursor.execute(
+        "UPDATE step_instance SET status = 'completed', result_action = %s WHERE id = %s",
+        (action, parent_step["id"])
+    )
+    
+    # 4. Resume parent
+    cursor.execute(
+        "UPDATE workflow_instance SET status = 'running' WHERE id = %s",
+        (parent_instance["id"],)
+    )
+    
+    # 5. Advance to next step
+    transition = _get_transition(cursor, parent_step["step_definition_id"], action)
+    next_step = _get_step_by_id(cursor, transition["to_step_definition_id"])
+    _enter_step(cursor, parent_instance, next_step, action)
+```
+
+## Completing a Workflow
+
+Implemented in `apps/api/src/api/runtime.py:529`
+
+```python
+def _complete_workflow(cursor, workflow_instance, step_instance, result_action):
+    # 1. Copy context to output
+    cursor.execute(
+        "UPDATE workflow_instance_data SET output_data = context_data WHERE workflow_instance_id = %s",
+        (workflow_instance["id"],)
+    )
+    
+    # 2. Complete step
+    cursor.execute(
+        "UPDATE step_instance SET status = 'completed', result_action = %s, completed_at = now() "
+        "WHERE id = %s",
+        (result_action, step_instance["id"])
+    )
+    
+    # 3. Complete workflow
+    new_status = "completed" if result_action == "approve" else "rejected"
+    cursor.execute(
+        "UPDATE workflow_instance SET status = %s, completed_at = now() WHERE id = %s",
+        (new_status, workflow_instance["id"])
+    )
+    
+    # 4. Record status history
+    _record_status_history(cursor, workflow_instance["id"], 
+                          workflow_instance["status"], new_status, 
+                          "terminal step reached")
+    
+    # 5. If this is a child workflow, resume parent
+    if workflow_instance["parent_workflow_instance_id"]:
+        _resume_parent_from_child(cursor, workflow_instance, result_action)
+```
+
+## State Machine
+
+Workflow instance status transitions:
+
+```
+      start
+        |
+        v
+    [running] ──────────────────> [completed]
+        |                              ^
+        |                              |
+        v                              |
+    [waiting] ─── user action ────────┘
+        |
+        v
+    [paused] ─── child completes ──> [running]
+        |
+        v
+    [cancelled]
+```
+
+Step instance status transitions:
+
+```
+    [pending] ─> [active] ─> [waiting] ─> [completed]
+                     |           |            ^
+                     |           |            |
+                     |           └────────────┘
+                     v
+               [failed/cancelled]
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Database Schema" icon="database" href="./database-schema">
+    See complete table definitions
+  </Card>
+  <Card title="RabbitMQ Integration" icon="message" href="./rabbitmq">
+    How async messaging works
+  </Card>
+</CardGroup>

@@ -1,0 +1,145 @@
+---
+title: "List My Notifications"
+description: "Retrieve all notifications for the authenticated user"
+---
+
+## Overview
+
+Returns a list of all notifications for the current authenticated user, ordered by creation date (newest first). Notifications are created when workflow events occur, such as when tasks are assigned or workflows reach specific states.
+
+## Endpoint
+
+```
+GET /api/v1/me/notifications
+```
+
+## Authentication
+
+<Note>
+This endpoint requires authentication. Include a valid authentication token in your request.
+</Note>
+
+## Request Parameters
+
+This endpoint does not accept any query parameters or request body. It automatically returns notifications for the authenticated user.
+
+## Response
+
+Returns a list of notification objects ordered by creation date (newest first).
+
+### Response Schema
+
+<ResponseField name="items" type="array" required>
+  Array of notification objects
+  
+  <ResponseField name="id" type="UUID" required>
+    Unique identifier for the notification
+  </ResponseField>
+  
+  <ResponseField name="workflowInstanceId" type="UUID">
+    ID of the workflow instance this notification relates to
+  </ResponseField>
+  
+  <ResponseField name="stepInstanceId" type="UUID">
+    ID of the step instance this notification relates to
+  </ResponseField>
+  
+  <ResponseField name="notificationType" type="string" required>
+    Type of notification. Common types include:
+    - `task_assigned` - A task has been assigned to the user
+    - `workflow_completed` - A workflow has completed
+    - `workflow_failed` - A workflow has failed
+  </ResponseField>
+  
+  <ResponseField name="title" type="string" required>
+    Notification title (e.g., "Action required: Review Document")
+  </ResponseField>
+  
+  <ResponseField name="body" type="string" required>
+    Notification message body providing details about the event
+  </ResponseField>
+  
+  <ResponseField name="isRead" type="boolean" required>
+    Whether the notification has been marked as read
+  </ResponseField>
+  
+  <ResponseField name="readAt" type="string">
+    ISO 8601 timestamp when the notification was marked as read (null if unread)
+  </ResponseField>
+  
+  <ResponseField name="createdAt" type="string" required>
+    ISO 8601 timestamp when the notification was created
+  </ResponseField>
+</ResponseField>
+
+## Notification Types
+
+<Note>
+The `notificationType` field indicates why the notification was created:
+
+- **task_assigned**: A human task has been assigned to you and requires action
+- **workflow_completed**: A workflow you're involved with has completed
+- **workflow_failed**: A workflow has failed or been rejected
+</Note>
+
+## Example Request
+
+```bash cURL
+curl -X GET https://api.example.com/api/v1/me/notifications \
+  -H "Authorization: Bearer YOUR_AUTH_TOKEN"
+```
+
+## Example Response
+
+```json
+{
+  "items": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440001",
+      "workflowInstanceId": "550e8400-e29b-41d4-a716-446655440100",
+      "stepInstanceId": "550e8400-e29b-41d4-a716-446655440200",
+      "notificationType": "task_assigned",
+      "title": "Action required: Approve Budget Request",
+      "body": "The workflow 'Budget Approval Process' is waiting for your action.",
+      "isRead": false,
+      "readAt": null,
+      "createdAt": "2024-01-15T10:30:00Z"
+    },
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440002",
+      "workflowInstanceId": "550e8400-e29b-41d4-a716-446655440101",
+      "stepInstanceId": "550e8400-e29b-41d4-a716-446655440201",
+      "notificationType": "task_assigned",
+      "title": "Action required: Review Document",
+      "body": "The workflow 'Document Review' is waiting for your action.",
+      "isRead": true,
+      "readAt": "2024-01-14T16:45:00Z",
+      "createdAt": "2024-01-14T14:20:00Z"
+    }
+  ]
+}
+```
+
+## Error Responses
+
+<ResponseField name="401 Unauthorized">
+  Authentication token is missing or invalid
+  
+  ```json
+  {
+    "detail": "Unauthorized"
+  }
+  ```
+</ResponseField>
+
+## Use Cases
+
+- Display notifications in a user dashboard or inbox
+- Build a notification center showing all user alerts
+- Poll for new notifications to update UI in real-time
+- Filter unread notifications to show pending items requiring attention
+
+## Related Endpoints
+
+- [Mark Notification as Read](/api/notifications/mark-read) - Mark a notification as read
+- [List My Tasks](/api/tasks/list) - View tasks assigned to you

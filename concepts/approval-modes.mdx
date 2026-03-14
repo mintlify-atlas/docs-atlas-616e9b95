@@ -1,0 +1,549 @@
+---
+title: Approval Modes
+description: Learn about priority_chain, approve_any_one, approve_all, and notify_all approval strategies for human task steps
+---
+
+## Overview
+
+Approval modes determine how multiple assignees are notified and how their responses are handled when a workflow reaches a human task step. The mode is configured at the step level and controls:
+
+- Who receives notifications and when
+- Whether one or multiple approvals are required
+- How escalation works
+- When the workflow advances
+
+<Info>
+  Approval mode is set in the `workflow_step_assignment_policy` table and copied to each task's `approval_mode_snapshot` field for audit purposes.
+</Info>
+
+## Approval Mode Types
+
+### priority_chain
+
+Notifies assignees **sequentially** based on priority. Only the highest-priority assignee receives a task initially. If they don't respond within the escalation timeout, the next assignee is notified.
+
+**Use case:** Escalation workflows where you want the first-level manager to act, but automatically escalate to senior management if they don't respond.
+
+#### Configuration
+
+```json
+{
+  "assignmentPolicy": {
+    "approvalMode": "priority_chain",
+    "priorityEscalationEnabled": true,
+    "escalationTimeoutSeconds": 86400,
+    "maxEscalationCount": 3
+  },
+  "associations": [
+    {
+      "associationType": "user",
+      "associationValue": "manager@example.com",
+      "priority": 1,
+      "notificationOrder": 1,
+      "escalationAfterSeconds": 86400
+    },
+    {
+      "associationType": "user",
+      "associationValue": "director@example.com",
+      "priority": 2,
+      "notificationOrder": 2,
+      "escalationAfterSeconds": 86400
+    },
+    {
+      "associationType": "user",
+      "associationValue": "vp@example.com",
+      "priority": 3,
+      "notificationOrder": 3
+    }
+  ]
+}
+```
+
+#### Task Creation Logic
+
+From `runtime.py:396-409`:
+
+```python
+for index, assignee in enumerate(resolved_assignees):
+    task_status = (
+        "open"
+        if approval_mode in {"approve_any_one", "approve_all", "notify_all"} or index == 0
+        else "queued"
+    )
+    escalation_due_at = None
+    if task_status == "queued":
+        timeout_seconds = (
+            assignee["escalation_after_seconds"]
+            or (policy["escalation_timeout_seconds"] if policy else None)
+            or 86400
+        )
+        escalation_due_at = now + timedelta(seconds=timeout_seconds * index)
+```
+
+**Behavior:**
+- **First assignee** gets `status: "open"`
+- **Subsequent assignees** get `status: "queued"` with `escalation_due_at` set
+- Background workers monitor `escalation_due_at` and promote queued tasks to `open`
+- **First response wins** - workflow advances immediately
+- All other tasks are cancelled
+
+#### Timeline Example
+
+```mermaid
+gantt
+    title Priority Chain Escalation
+    dateFormat HH:mm
+    axisFormat %H:%M
+    
+    section Manager
+    Task Open :active, t1, 00:00, 24h
+    
+    section Director
+    Task Queued :crit, t2, 00:00, 24h
+    Task Open :active, t3, 24:00, 24h
+    
+    section VP
+    Task Queued :crit, t4, 00:00, 48h
+    Task Open :active, t5, 48:00, 24h
+```
+
+<Tip>
+  Use `notificationOrder` and `priority` to control escalation sequence. Lower numbers are processed first.
+</Tip>
+
+### approve_any_one
+
+Notifies **all assignees immediately**. The **first approval** from any assignee advances the workflow. All other tasks are cancelled.
+
+**Use case:** Shared team inboxes where any team member can handle the request.
+
+#### Configuration
+
+```json
+{
+  "assignmentPolicy": {
+    "approvalMode": "approve_any_one"
+  },
+  "associations": [
+    {
+      "associationType": "user",
+      "associationValue": "reviewer1@example.com"
+    },
+    {
+      "associationType": "user",
+      "associationValue": "reviewer2@example.com"
+    },
+    {
+      "associationType": "user",
+      "associationValue": "reviewer3@example.com"
+    }
+  ]
+}
+```
+
+#### Task Creation Logic
+
+```python
+# runtime.py:396-401
+for index, assignee in enumerate(resolved_assignees):
+    task_status = (
+        "open"
+        if approval_mode in {"approve_any_one", "approve_all", "notify_all"} or index == 0
+        else "queued"
+    )
+```
+
+**Behavior:**
+- **All assignees** get `status: "open"` immediately
+- **All assignees** receive notifications at the same time
+- **First action taken** advances the workflow
+- **All other tasks** are cancelled
+
+#### Cancellation Logic
+
+From `runtime.py:1346`:
+
+```python
+# After action is taken
+if not advance:
+    # approve_all mode still waiting
+    return WorkflowTaskActionResponse(...)
+
+_cancel_other_tasks(cursor, task_row["step_instance_id"], task_row["id"])
+```
+
+From `runtime.py:574-582`:
+
+```python
+def _cancel_other_tasks(cursor, step_instance_id, except_task_id):
+    cursor.execute(
+        """
+        UPDATE human_task
+        SET status = 'cancelled'
+        WHERE step_instance_id = %s AND id <> %s AND status IN ('queued', 'open', 'claimed')
+        """,
+        (step_instance_id, except_task_id),
+    )
+```
+
+<Note>
+  This mode is ideal for load balancing work across team members. Users see tasks disappear from their inbox when a colleague acts.
+</Note>
+
+### approve_all
+
+Notifies **all assignees immediately**. The workflow **requires approval from every assignee** before advancing.
+
+**Use case:** Consensus-based approvals where all stakeholders must agree (e.g., legal + finance + operations).
+
+#### Configuration
+
+```json
+{
+  "assignmentPolicy": {
+    "approvalMode": "approve_all",
+    "requiredApprovalsCount": null
+  },
+  "associations": [
+    {
+      "associationType": "user",
+      "associationValue": "legal@example.com",
+      "canApprove": true,
+      "canReject": true
+    },
+    {
+      "associationType": "user",
+      "associationValue": "finance@example.com",
+      "canApprove": true,
+      "canReject": true
+    },
+    {
+      "associationType": "user",
+      "associationValue": "operations@example.com",
+      "canApprove": true,
+      "canReject": true
+    }
+  ]
+}
+```
+
+#### Approval Tracking Logic
+
+From `runtime.py:1315-1335`:
+
+```python
+advance = True
+if action_type == "approve" and task_row["approval_mode_snapshot"] == "approve_all":
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS remaining
+        FROM human_task
+        WHERE step_instance_id = %s AND status IN ('open', 'queued', 'claimed') AND id <> %s
+        """,
+        (task_row["step_instance_id"], task_row["id"]),
+    )
+    remaining = cursor.fetchone()["remaining"]
+    if remaining > 0:
+        advance = False
+        cursor.execute(
+            """
+            UPDATE step_instance
+            SET result_action = 'approve'
+            WHERE id = %s
+            """,
+            (task_row["step_instance_id"],),
+        )
+
+if not advance:
+    return WorkflowTaskActionResponse(
+        workflowInstanceId=task_row["workflow_instance_id"],
+        stepInstanceId=task_row["step_instance_id"],
+        actionType=action_type,
+        workflowStatus="waiting",
+        nextStepCode=None,
+    )
+```
+
+**Behavior:**
+- **All assignees** get `status: "open"` immediately
+- **All assignees** must approve for workflow to advance
+- **First reject** fails the step and advances workflow (typically to rejection path)
+- **Partial approvals** are tracked but workflow stays in `waiting` status
+
+<Warning>
+  In `approve_all` mode, a single rejection immediately advances the workflow. There is no voting mechanism - consensus is required.
+</Warning>
+
+#### Progress Tracking
+
+To see approval progress:
+
+```bash
+GET /api/v1/workflow-instances/{workflow_instance_id}
+```
+
+Response includes task list:
+
+```json
+{
+  "steps": [
+    {
+      "stepCode": "consensus_review",
+      "status": "waiting"
+    }
+  ],
+  "tasks": [
+    {
+      "assignedUserId": "legal-user-id",
+      "status": "completed",
+      "resultAction": "approve"
+    },
+    {
+      "assignedUserId": "finance-user-id",
+      "status": "open"
+    },
+    {
+      "assignedUserId": "operations-user-id",
+      "status": "open"
+    }
+  ]
+}
+```
+
+### notify_all
+
+Notifies **all assignees** but follows policy-specific rules for completion.
+
+**Use case:** Flexible notification where the policy determines response requirements (could be like approve_any_one or approve_all).
+
+```json
+{
+  "assignmentPolicy": {
+    "approvalMode": "notify_all",
+    "requiredApprovalsCount": 2
+  }
+}
+```
+
+<Info>
+  `notify_all` is a flexible mode for future quorum support. Currently behaves like `approve_any_one` unless `requiredApprovalsCount` logic is implemented.
+</Info>
+
+## Assignment Policy Schema
+
+### workflow_step_assignment_policy
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | uuid | Policy ID |
+| `step_definition_id` | uuid (unique) | One policy per step |
+| `approval_mode` | text | `priority_chain`, `approve_any_one`, `approve_all`, `notify_all` |
+| `required_approvals_count` | int (nullable) | For future quorum support |
+| `priority_escalation_enabled` | bool | Enable automatic escalation |
+| `escalation_timeout_seconds` | int (nullable) | Default escalation timeout |
+| `reminder_interval_seconds` | int (nullable) | Interval for reminder notifications |
+| `max_escalation_count` | int (nullable) | Maximum escalation levels |
+| `created_at` | timestamptz | Creation timestamp |
+
+### Step Association Schema
+
+### workflow_step_association
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | uuid | Association ID |
+| `step_definition_id` | uuid | Parent step |
+| `association_type` | text | `user`, `role`, `group`, `sql_rule` |
+| `association_value` | text | User ID/email, role key, group key |
+| `can_approve` | bool | Can perform approve action |
+| `can_reject` | bool | Can perform reject action |
+| `can_revert` | bool | Can perform revert action |
+| `priority` | int | Lower = higher priority |
+| `notification_order` | int | Explicit notification sequence |
+| `escalation_after_seconds` | int (nullable) | Override escalation timeout |
+| `is_active` | bool | Active flag |
+| `created_at` | timestamptz | Creation timestamp |
+
+## Comparison Matrix
+
+| Feature | priority_chain | approve_any_one | approve_all | notify_all |
+|---------|---------------|----------------|-------------|------------|
+| **All notified immediately** | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Sequential notification** | ✅ Yes | ❌ No | ❌ No | ❌ No |
+| **First response wins** | ✅ Yes | ✅ Yes | ❌ No | Configurable |
+| **All must approve** | ❌ No | ❌ No | ✅ Yes | Configurable |
+| **Escalation support** | ✅ Yes | ❌ No | ❌ No | Optional |
+| **Best for** | Hierarchies | Shared queues | Consensus | Flexible |
+
+## Real-World Examples
+
+### Example 1: Invoice Approval (priority_chain)
+
+```json
+{
+  "stepCode": "invoice_approval",
+  "stepLabel": "Invoice Approval",
+  "stepType": "human_task",
+  "assignmentPolicy": {
+    "approvalMode": "priority_chain",
+    "escalationTimeoutSeconds": 86400
+  },
+  "associations": [
+    {
+      "associationType": "role",
+      "associationValue": "team_lead",
+      "priority": 1,
+      "escalationAfterSeconds": 86400
+    },
+    {
+      "associationType": "role",
+      "associationValue": "department_manager",
+      "priority": 2,
+      "escalationAfterSeconds": 86400
+    },
+    {
+      "associationType": "role",
+      "associationValue": "finance_director",
+      "priority": 3
+    }
+  ]
+}
+```
+
+**Flow:**
+1. Team lead gets task (24h timeout)
+2. If no response, department manager gets task (24h timeout)
+3. If no response, finance director gets task
+
+### Example 2: Support Ticket Assignment (approve_any_one)
+
+```json
+{
+  "stepCode": "assign_ticket",
+  "stepLabel": "Assign Support Ticket",
+  "stepType": "human_task",
+  "assignmentPolicy": {
+    "approvalMode": "approve_any_one"
+  },
+  "associations": [
+    {
+      "associationType": "group",
+      "associationValue": "tier2_support"
+    }
+  ]
+}
+```
+
+**Flow:**
+1. All tier 2 support agents see the ticket
+2. First agent to claim/approve handles it
+3. Ticket disappears from other agents' queues
+
+### Example 3: Contract Review (approve_all)
+
+```json
+{
+  "stepCode": "contract_review",
+  "stepLabel": "Multi-Party Contract Review",
+  "stepType": "human_task",
+  "remarkRequiredOnReject": true,
+  "assignmentPolicy": {
+    "approvalMode": "approve_all"
+  },
+  "associations": [
+    {
+      "associationType": "user",
+      "associationValue": "legal@example.com"
+    },
+    {
+      "associationType": "user",
+      "associationValue": "finance@example.com"
+    },
+    {
+      "associationType": "user",
+      "associationValue": "compliance@example.com"
+    }
+  ]
+}
+```
+
+**Flow:**
+1. Legal, Finance, and Compliance all receive tasks
+2. Each must approve for workflow to proceed
+3. If any one rejects, workflow routes to rejection path
+
+## API Configuration
+
+When creating or updating a workflow definition:
+
+```bash
+POST /api/v1/workflow-definitions
+```
+
+```json
+{
+  "key": "approval_workflow",
+  "name": "Approval Workflow",
+  "steps": [
+    {
+      "stepCode": "review",
+      "stepType": "human_task",
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain",
+        "priorityEscalationEnabled": true,
+        "escalationTimeoutSeconds": 86400,
+        "reminderIntervalSeconds": 43200,
+        "maxEscalationCount": 3
+      },
+      "associations": [
+        {
+          "associationType": "user",
+          "associationValue": "manager@example.com",
+          "priority": 1,
+          "notificationOrder": 1,
+          "canApprove": true,
+          "canReject": true,
+          "canRevert": true
+        }
+      ]
+    }
+  ],
+  "transitions": [...]
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Match Mode to Business Process" icon="sitemap">
+    Use priority_chain for hierarchies, approve_any_one for teams, approve_all for consensus
+  </Card>
+  
+  <Card title="Set Realistic Timeouts" icon="clock">
+    Configure escalation timeouts based on actual business SLAs
+  </Card>
+  
+  <Card title="Test Multi-User Scenarios" icon="users">
+    Verify behavior with seeded test users before deploying to production
+  </Card>
+  
+  <Card title="Use Reminders" icon="bell">
+    Configure reminderIntervalSeconds to nudge users before escalation
+  </Card>
+</CardGroup>
+
+## Related Concepts
+
+<CardGroup cols={2}>
+  <Card title="Human Tasks" icon="user-check" href="/concepts/human-tasks">
+    Learn about task creation, assignment, and actions
+  </Card>
+  
+  <Card title="Steps and Transitions" icon="route" href="/concepts/steps-and-transitions">
+    Understand step types and transition logic
+  </Card>
+  
+  <Card title="Workflow Definitions" icon="diagram-project" href="/concepts/workflow-definitions">
+    Learn about static workflow templates
+  </Card>
+</CardGroup>

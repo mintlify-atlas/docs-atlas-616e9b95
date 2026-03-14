@@ -1,0 +1,726 @@
+---
+title: Deployment Guide
+description: How to deploy the Workflow Engine Platform to production
+---
+
+This guide covers deploying the Workflow Engine Platform from local development to production environments.
+
+## Prerequisites
+
+Before deploying, ensure you have:
+
+- PostgreSQL database (Neon recommended)
+- RabbitMQ instance (managed service or self-hosted)
+- Python 3.11+ with `uv` installed
+- Node.js 20+ with `pnpm` installed
+- Better Auth configured for production
+
+## Environment Setup
+
+### Database (PostgreSQL on Neon)
+
+1. **Create a Neon project** at [neon.tech](https://neon.tech)
+
+2. **Get connection string**:
+   ```
+   postgresql://user:password@host.neon.tech/dbname?sslmode=require
+   ```
+
+3. **Set environment variables**:
+
+   **Backend (`apps/api/.env`)**:
+   ```env
+   WORKFLOW_DATABASE_URL=postgresql://...
+   BETTER_AUTH_URL=https://your-domain.com
+   BETTER_AUTH_SECRET=your-secret-key
+   RABBITMQ_URL=amqp://user:pass@rabbitmq-host:5672/
+   ```
+
+   **Frontend (`apps/web/.env.local`)**:
+   ```env
+   DATABASE_URL=postgresql://...
+   BETTER_AUTH_URL=https://your-domain.com
+   BETTER_AUTH_SECRET=your-secret-key
+   NEXT_PUBLIC_API_URL=https://api.your-domain.com
+   ```
+
+<Note>
+  Both `DATABASE_URL` (web) and `WORKFLOW_DATABASE_URL` (api) should point to the **same** Neon database.
+</Note>
+
+### Database Schema Bootstrap
+
+Run the bootstrap script to create all tables:
+
+```bash
+# From project root
+pnpm bootstrap:db
+
+# Or directly with uv
+uv run --project apps/api python apps/api/scripts/bootstrap_neon.py
+```
+
+This creates:
+- All static tables (workflow definitions, steps, transitions)
+- All runtime tables (instances, tasks, actions)
+- Better Auth tables (user, session, account)
+- Indexes and constraints
+
+See `apps/api/scripts/bootstrap_neon.py` for the complete schema.
+
+### Seed Test Users (Optional)
+
+For development and testing:
+
+```bash
+pnpm --dir apps/web seed:users
+```
+
+Creates these test accounts:
+- `admin@example.com` / `password1234`
+- `manager@example.com` / `password1234`
+- `reviewer1@example.com` / `password1234`
+- `reviewer2@example.com` / `password1234`
+- `requester@example.com` / `password1234`
+
+<Warning>
+  **Do not** run this in production. Test users should only exist in local/staging environments.
+</Warning>
+
+## RabbitMQ Setup
+
+### Local Development
+
+Use Docker Compose:
+
+```bash
+# Start RabbitMQ
+docker compose -f infra/docker-compose.yml up -d
+
+# Access management UI
+open http://localhost:15672
+# Username: workflow
+# Password: workflow
+
+# Stop RabbitMQ
+docker compose -f infra/docker-compose.yml down
+```
+
+### Production
+
+Options:
+
+1. **CloudAMQP** (managed RabbitMQ)
+   - Sign up at [cloudamqp.com](https://cloudamqp.com)
+   - Get AMQP URL: `amqps://...`
+   - Set `RABBITMQ_URL` environment variable
+
+2. **AWS Amazon MQ**
+   - Create RabbitMQ broker in AWS Console
+   - Use broker endpoint URL
+   - Configure security groups
+
+3. **Self-Hosted**
+   - Deploy RabbitMQ container
+   - Configure persistence volumes
+   - Enable management plugin
+   - Set up monitoring
+
+**Required Queues**:
+Queues are auto-created by the application:
+- `workflow.engine`
+- `workflow.notifications`
+- `workflow.reminders`
+- `workflow.subworkflow`
+- `workflow.dead_letter`
+
+## Backend Deployment (FastAPI)
+
+### Option 1: Docker Container
+
+Create `apps/api/Dockerfile`:
+
+```dockerfile
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install uv
+RUN pip install uv
+
+# Copy project files
+COPY apps/api/pyproject.toml apps/api/uv.lock ./
+
+# Install dependencies
+RUN uv sync --frozen
+
+# Copy source code
+COPY apps/api/src ./src
+
+# Expose port
+EXPOSE 8000
+
+# Run FastAPI
+CMD ["uv", "run", "uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]
+```
+
+Build and run:
+
+```bash
+# Build image
+docker build -f apps/api/Dockerfile -t workflow-api .
+
+# Run container
+docker run -p 8000:8000 \
+  -e WORKFLOW_DATABASE_URL="postgresql://..." \
+  -e RABBITMQ_URL="amqp://..." \
+  workflow-api
+```
+
+### Option 2: Traditional Server
+
+On your server (Ubuntu/Debian):
+
+```bash
+# Install Python and uv
+apt-get update
+apt-get install -y python3.11 python3-pip
+pip3 install uv
+
+# Clone repository
+git clone <your-repo-url>
+cd workflow-engine-platform
+
+# Install dependencies
+cd apps/api
+uv sync
+
+# Set environment variables
+export WORKFLOW_DATABASE_URL="postgresql://..."
+export RABBITMQ_URL="amqp://..."
+
+# Run with systemd or supervisor
+uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
+```
+
+**Systemd Service Example** (`/etc/systemd/system/workflow-api.service`):
+
+```ini
+[Unit]
+Description=Workflow Engine API
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/workflow-engine-platform/apps/api
+Environment="WORKFLOW_DATABASE_URL=postgresql://..."
+Environment="RABBITMQ_URL=amqp://..."
+ExecStart=/usr/local/bin/uv run uvicorn api.main:app --host 0.0.0.0 --port 8000
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
+
+```bash
+systemctl enable workflow-api
+systemctl start workflow-api
+systemctl status workflow-api
+```
+
+### Option 3: Serverless (with caveats)
+
+FastAPI can run serverless (AWS Lambda, Google Cloud Run) but:
+
+<Warning>
+  - Cold starts may impact workflow execution timing
+  - Background workers need separate deployment
+  - Long-running operations may timeout
+  
+  **Recommended**: Use serverless for API, traditional hosting for workers.
+</Warning>
+
+## Frontend Deployment (Next.js)
+
+### Option 1: Vercel (Recommended)
+
+Vercel is built for Next.js:
+
+1. **Install Vercel CLI**:
+   ```bash
+   pnpm add -g vercel
+   ```
+
+2. **Deploy**:
+   ```bash
+   cd apps/web
+   vercel
+   ```
+
+3. **Set Environment Variables** in Vercel dashboard:
+   - `DATABASE_URL`
+   - `BETTER_AUTH_URL`
+   - `BETTER_AUTH_SECRET`
+   - `NEXT_PUBLIC_API_URL`
+
+4. **Deploy to Production**:
+   ```bash
+   vercel --prod
+   ```
+
+### Option 2: Self-Hosted with Docker
+
+Create `apps/web/Dockerfile`:
+
+```dockerfile
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+# Install pnpm
+RUN npm install -g pnpm@10
+
+# Copy package files
+COPY apps/web/package.json apps/web/pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile
+
+# Copy source
+COPY apps/web ./
+
+# Build
+RUN pnpm build
+
+# Production image
+FROM node:20-alpine AS runner
+
+WORKDIR /app
+
+RUN npm install -g pnpm@10
+
+COPY --from=builder /app/package.json ./
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/.next ./.next
+COPY --from=builder /app/public ./public
+
+EXPOSE 3000
+
+CMD ["pnpm", "start"]
+```
+
+Build and run:
+
+```bash
+# Build
+docker build -f apps/web/Dockerfile -t workflow-web .
+
+# Run
+docker run -p 3000:3000 \
+  -e DATABASE_URL="postgresql://..." \
+  -e NEXT_PUBLIC_API_URL="https://api.your-domain.com" \
+  workflow-web
+```
+
+### Option 3: Netlify / Cloudflare Pages
+
+Both support Next.js with some configuration:
+
+**Netlify**:
+```toml
+# netlify.toml
+[build]
+  command = "pnpm build:web"
+  publish = "apps/web/.next"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+```
+
+**Cloudflare Pages**:
+- Configure build command: `pnpm build:web`
+- Build output directory: `apps/web/.next`
+- Install `@cloudflare/next-on-pages`
+
+## Background Workers
+
+Workers must run continuously to process outbox events and reminders.
+
+### Outbox Publisher Worker
+
+Publishes events from `outbox_event` table to RabbitMQ:
+
+```bash
+# Run continuously
+pnpm queue:publish
+
+# Or with uv
+uv run --project apps/api python apps/api/scripts/publish_outbox.py
+```
+
+**Systemd Service** (`/etc/systemd/system/workflow-outbox.service`):
+
+```ini
+[Unit]
+Description=Workflow Outbox Publisher
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/workflow-engine-platform
+Environment="WORKFLOW_DATABASE_URL=postgresql://..."
+Environment="RABBITMQ_URL=amqp://..."
+ExecStart=/usr/local/bin/pnpm queue:publish
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Priority Task Release Worker
+
+Releases queued priority-chain tasks when escalation timeout occurs:
+
+```bash
+pnpm queue:release
+
+# Or with uv
+uv run --project apps/api python apps/api/scripts/release_priority_tasks.py
+```
+
+**Systemd Service** (`/etc/systemd/system/workflow-release.service`):
+
+```ini
+[Unit]
+Description=Workflow Priority Task Release
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/workflow-engine-platform
+Environment="WORKFLOW_DATABASE_URL=postgresql://..."
+ExecStart=/usr/local/bin/pnpm queue:release
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Worker Deployment Options
+
+1. **Same server as API** - Simple, works for low-medium volume
+2. **Separate worker containers** - Better isolation and scaling
+3. **Kubernetes Jobs** - For cloud-native deployments
+4. **AWS ECS/Fargate** - Managed container execution
+
+## Reverse Proxy (Nginx)
+
+Example Nginx configuration:
+
+```nginx
+# /etc/nginx/sites-available/workflow-engine
+
+upstream api {
+    server localhost:8000;
+}
+
+upstream web {
+    server localhost:3000;
+}
+
+server {
+    listen 80;
+    server_name your-domain.com;
+
+    # Redirect to HTTPS
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name your-domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/your-domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/your-domain.com/privkey.pem;
+
+    # API endpoints
+    location /api/ {
+        proxy_pass http://api;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
+    # Next.js frontend
+    location / {
+        proxy_pass http://web;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Enable and reload:
+
+```bash
+ln -s /etc/nginx/sites-available/workflow-engine /etc/nginx/sites-enabled/
+nginx -t
+systemctl reload nginx
+```
+
+## SSL/TLS Certificates
+
+Use Let's Encrypt with Certbot:
+
+```bash
+# Install certbot
+apt-get install certbot python3-certbot-nginx
+
+# Obtain certificate
+certbot --nginx -d your-domain.com -d www.your-domain.com
+
+# Auto-renewal
+systemctl enable certbot.timer
+```
+
+## Health Checks
+
+### API Health Endpoint
+
+FastAPI provides automatic health check:
+
+```bash
+curl https://api.your-domain.com/health
+# {"status": "ok"}
+```
+
+### Database Connection Check
+
+```python
+# apps/api/src/api/main.py
+@app.get("/health")
+def health_check():
+    try:
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT 1")
+        return {"status": "ok", "database": "connected"}
+    except Exception as e:
+        return {"status": "error", "database": str(e)}
+```
+
+### RabbitMQ Connection Check
+
+```python
+import pika
+
+def check_rabbitmq():
+    try:
+        connection = pika.BlockingConnection(
+            pika.URLParameters(settings.RABBITMQ_URL)
+        )
+        connection.close()
+        return True
+    except Exception:
+        return False
+```
+
+## Monitoring and Logging
+
+### Application Logs
+
+**FastAPI**:
+```python
+import logging
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('/var/log/workflow-api/app.log'),
+        logging.StreamHandler()
+    ]
+)
+```
+
+**Next.js**: Logs to stdout, capture with Docker or systemd.
+
+### Database Monitoring
+
+Neon provides built-in monitoring:
+- Query performance
+- Connection pooling stats
+- Storage usage
+
+Access via Neon dashboard.
+
+### RabbitMQ Monitoring
+
+Management UI at `http://rabbitmq-host:15672`:
+- Queue depth
+- Message rates
+- Consumer activity
+- Connection status
+
+### Recommended Monitoring Stack
+
+- **Metrics**: Prometheus + Grafana
+- **Logs**: Loki or ELK stack
+- **Tracing**: OpenTelemetry
+- **Alerts**: Alertmanager or PagerDuty
+
+## Backup Strategy
+
+### Database Backups
+
+Neon provides automatic backups:
+- Point-in-time recovery (PITR)
+- Branch-based backups
+- Restore via Neon console
+
+**Manual backup**:
+```bash
+pg_dump "postgresql://..." > backup-$(date +%Y%m%d).sql
+```
+
+### Workflow Definition Export
+
+Export workflow definitions periodically:
+
+```bash
+curl https://api.your-domain.com/api/v1/workflow-definitions \
+  -H "Authorization: Bearer $TOKEN" \
+  > workflow-definitions-$(date +%Y%m%d).json
+```
+
+## Scaling Considerations
+
+### Horizontal Scaling
+
+- **API servers**: Run multiple instances behind load balancer
+- **Workers**: Scale independently based on queue depth
+- **Database**: Neon autoscales read replicas
+- **RabbitMQ**: Use clustering for high availability
+
+### Performance Tuning
+
+**Database**:
+- Add indexes on frequent query columns
+- Partition large runtime tables by date
+- Archive completed workflows older than retention period
+
+**API**:
+- Enable FastAPI response caching
+- Use connection pooling
+- Implement rate limiting
+
+**Workers**:
+- Adjust batch sizes
+- Increase concurrency for I/O-bound tasks
+- Use priority queues for critical events
+
+## Troubleshooting
+
+### API won't start
+
+```bash
+# Check environment variables
+env | grep DATABASE_URL
+env | grep RABBITMQ_URL
+
+# Test database connection
+psql "postgresql://..."
+
+# View logs
+journalctl -u workflow-api -f
+```
+
+### Workers not processing messages
+
+```bash
+# Check RabbitMQ queue depth
+rabbitmqadmin list queues
+
+# Check worker logs
+journalctl -u workflow-outbox -f
+
+# Verify RABBITMQ_URL
+echo $RABBITMQ_URL
+```
+
+### Database migration issues
+
+```bash
+# Re-run bootstrap (idempotent)
+pnpm bootstrap:db
+
+# Check table existence
+psql "postgresql://..." -c "\dt"
+```
+
+## Production Checklist
+
+<Steps>
+  <Step title="Database">
+    - [ ] Neon database created
+    - [ ] Connection string set in both apps
+    - [ ] Bootstrap script run successfully
+    - [ ] Test users removed (if any)
+  </Step>
+
+  <Step title="RabbitMQ">
+    - [ ] RabbitMQ instance running
+    - [ ] RABBITMQ_URL configured
+    - [ ] Queues auto-created on first message
+    - [ ] Management UI accessible
+  </Step>
+
+  <Step title="API">
+    - [ ] FastAPI server running
+    - [ ] Environment variables set
+    - [ ] Health check returns OK
+    - [ ] SSL/TLS configured
+  </Step>
+
+  <Step title="Web">
+    - [ ] Next.js deployed
+    - [ ] Better Auth configured
+    - [ ] API URL correct
+    - [ ] First user can sign up
+  </Step>
+
+  <Step title="Workers">
+    - [ ] Outbox publisher running
+    - [ ] Priority task releaser running
+    - [ ] Both restarting on failure
+    - [ ] Messages being processed
+  </Step>
+
+  <Step title="Monitoring">
+    - [ ] Logs aggregated
+    - [ ] Health checks configured
+    - [ ] Alerts set up
+    - [ ] Backup strategy in place
+  </Step>
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="sitemap" href="./overview">
+    Understand the system architecture
+  </Card>
+  <Card title="Database Schema" icon="database" href="./database-schema">
+    Review complete database schema
+  </Card>
+</CardGroup>

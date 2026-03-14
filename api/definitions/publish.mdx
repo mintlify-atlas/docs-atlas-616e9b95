@@ -1,0 +1,111 @@
+---
+title: "Publish Workflow Definition"
+description: "Publish the latest version of a workflow definition and set it to active status"
+---
+
+## Overview
+
+Publish the latest version of a workflow definition, making it active and available for creating new workflow instances. This endpoint marks the latest version as published, unpublishes all previous versions, and updates the workflow status to "active".
+
+## Endpoint
+
+```
+POST /api/v1/workflow-definitions/{definition_id}/publish
+```
+
+## Authentication
+
+This endpoint requires authentication. Include a valid authentication token in your request.
+
+## Path Parameters
+
+<ParamField path="definition_id" type="string (UUID)" required>
+  The unique identifier of the workflow definition to publish
+</ParamField>
+
+## Request Body
+
+This endpoint does not accept a request body.
+
+## Response
+
+Returns the published workflow definition with full details.
+
+<ResponseField name="item" type="object" required>
+  The published workflow definition (same structure as GET /api/v1/workflow-definitions/{definition_id})
+</ResponseField>
+
+## Publishing Process
+
+When you publish a workflow definition, the following actions occur:
+
+1. **Unpublish all previous versions**: All existing versions of this workflow are marked as unpublished
+2. **Publish the latest version**: The latest version (highest version number) is marked as published
+3. **Activate the workflow**: The workflow definition status is updated to "active"
+
+## Example Request
+
+```bash
+curl -X POST https://api.example.com/api/v1/workflow-definitions/550e8400-e29b-41d4-a716-446655440000/publish \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+## Example Response
+
+```json
+{
+  "item": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "key": "expense-approval",
+    "name": "Expense Approval Workflow",
+    "description": "Multi-level approval workflow for expense requests",
+    "status": "active",
+    "latestVersionId": "660e8400-e29b-41d4-a716-446655440001",
+    "latestVersionNo": 3,
+    "graphJson": {
+      "workflow": {
+        "key": "expense-approval",
+        "name": "Expense Approval Workflow",
+        "description": "Multi-level approval workflow for expense requests"
+      },
+      "steps": [...],
+      "transitions": [...]
+    },
+    "builderLayout": {
+      "nodes": [...],
+      "edges": [...],
+      "viewport": {"x": 0, "y": 0, "zoom": 1}
+    },
+    "steps": [...],
+    "transitions": [...]
+  }
+}
+```
+
+## Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication token is missing or invalid
+</ResponseField>
+
+<ResponseField name="404" type="Not Found">
+  Workflow definition not found
+  
+  ```json
+  {
+    "detail": "Workflow definition not found."
+  }
+  ```
+</ResponseField>
+
+<Note>
+Only the latest version is published. If you need to publish a specific earlier version, you must first update the workflow to recreate that version as the latest.
+</Note>
+
+<Note>
+New workflow instances will use the published version. Existing instances continue to run on the version they were created with.
+</Note>
+
+<Note>
+Publishing a workflow changes its status from "draft" to "active", making it available for creating new workflow instances.
+</Note>

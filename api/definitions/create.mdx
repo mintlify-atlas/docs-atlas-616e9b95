@@ -1,0 +1,417 @@
+---
+title: "Create Workflow Definition"
+description: "Create a new workflow definition with steps and transitions"
+---
+
+## Overview
+
+Create a new workflow definition in draft status. The workflow must include at least one start step, one terminal or end step, and valid transitions connecting all steps.
+
+## Endpoint
+
+```
+POST /api/v1/workflow-definitions
+```
+
+## Authentication
+
+This endpoint requires authentication. Include a valid authentication token in your request.
+
+## Request Body
+
+<ParamField body="key" type="string" required>
+  Unique key for the workflow definition (must be globally unique)
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Display name of the workflow definition
+</ParamField>
+
+<ParamField body="description" type="string" default="">
+  Description of the workflow definition
+</ParamField>
+
+<ParamField body="builderLayout" type="object" default="{}">
+  Visual layout configuration for the workflow builder UI. If not provided, will be automatically generated from the steps and transitions.
+</ParamField>
+
+<ParamField body="steps" type="array" required>
+  Array of workflow step definitions. Must include exactly one "start" step and at least one terminal or "end" step.
+  
+  <Expandable title="WorkflowStepInput">
+    <ParamField body="stepCode" type="string" required>
+      Unique code identifying this step within the workflow (must be unique across all steps)
+    </ParamField>
+    
+    <ParamField body="stepLabel" type="string" required>
+      Display label for the step
+    </ParamField>
+    
+    <ParamField body="description" type="string" default="">
+      Description of what this step does
+    </ParamField>
+    
+    <ParamField body="stepType" type="string" required>
+      Type of step: "start", "end", "human_task", "system_task", "subworkflow", or "decision"
+    </ParamField>
+    
+    <ParamField body="sequenceHint" type="integer" default="0">
+      Ordering hint for displaying steps
+    </ParamField>
+    
+    <ParamField body="allowRevert" type="boolean" default="true">
+      Whether this step can be reverted
+    </ParamField>
+    
+    <ParamField body="remarkRequiredOnApprove" type="boolean" default="false">
+      Whether a remark is required when approving
+    </ParamField>
+    
+    <ParamField body="remarkRequiredOnReject" type="boolean" default="false">
+      Whether a remark is required when rejecting
+    </ParamField>
+    
+    <ParamField body="remarkRequiredOnRevert" type="boolean" default="false">
+      Whether a remark is required when reverting
+    </ParamField>
+    
+    <ParamField body="maxVisitsPerInstance" type="integer | null" default="null">
+      Maximum number of times this step can be visited in a single workflow instance. Required for steps in cycles to prevent infinite loops.
+    </ParamField>
+    
+    <ParamField body="formSchema" type="object" default="{}">
+      JSON schema defining the form for this step
+    </ParamField>
+    
+    <ParamField body="config" type="object" default="{}">
+      Additional configuration for this step
+    </ParamField>
+    
+    <ParamField body="isTerminal" type="boolean" default="false">
+      Whether this step terminates the workflow
+    </ParamField>
+    
+    <ParamField body="notificationTemplate" type="object | null" default="null">
+      Notification template for task creation events
+      
+      <Expandable title="NotificationTemplate">
+        <ParamField body="titleTemplate" type="string" default="">
+          Title template with variable substitution
+        </ParamField>
+        
+        <ParamField body="bodyTemplate" type="string" default="">
+          Body template with variable substitution
+        </ParamField>
+        
+        <ParamField body="allowActorOverride" type="boolean" default="true">
+          Whether actors can customize the notification
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    
+    <ParamField body="subworkflowMapping" type="object | null" default="null">
+      Configuration for subworkflow steps (required when stepType is "subworkflow")
+      
+      <Expandable title="SubworkflowMapping">
+        <ParamField body="childWorkflowDefinitionId" type="string (UUID)" required>
+          ID of the child workflow definition
+        </ParamField>
+        
+        <ParamField body="childWorkflowVersionId" type="string (UUID) | null" default="null">
+          Specific version ID of the child workflow
+        </ParamField>
+        
+        <ParamField body="triggerMode" type="string" default="sync_wait">
+          Trigger mode: "sync_wait" or "async_wait"
+        </ParamField>
+        
+        <ParamField body="inputMapping" type="object" default="{}">
+          Mapping of parent workflow data to child workflow input
+        </ParamField>
+        
+        <ParamField body="outputMapping" type="object" default="{}">
+          Mapping of child workflow output to parent workflow data
+        </ParamField>
+        
+        <ParamField body="completionAction" type="string" default="approve">
+          Action type to execute on completion: "approve", "reject", "revert", or "custom"
+        </ParamField>
+        
+        <ParamField body="failureAction" type="string" default="reject">
+          Action type to execute on failure: "approve", "reject", "revert", or "custom"
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    
+    <ParamField body="assignmentPolicy" type="object" default="{approvalMode: 'priority_chain'}">
+      Policy for assigning tasks to users
+      
+      <Expandable title="AssignmentPolicy">
+        <ParamField body="approvalMode" type="string" default="priority_chain">
+          Approval mode: "priority_chain", "approve_any_one", "approve_all", or "notify_all"
+        </ParamField>
+        
+        <ParamField body="requiredApprovalsCount" type="integer | null" default="null">
+          Number of required approvals (used with certain approval modes)
+        </ParamField>
+        
+        <ParamField body="priorityEscalationEnabled" type="boolean" default="false">
+          Whether to enable priority-based escalation
+        </ParamField>
+        
+        <ParamField body="escalationTimeoutSeconds" type="integer | null" default="null">
+          Timeout in seconds before escalating
+        </ParamField>
+        
+        <ParamField body="reminderIntervalSeconds" type="integer | null" default="null">
+          Interval in seconds for sending reminders
+        </ParamField>
+        
+        <ParamField body="maxEscalationCount" type="integer | null" default="null">
+          Maximum number of escalations allowed
+        </ParamField>
+      </Expandable>
+    </ParamField>
+    
+    <ParamField body="associations" type="array" default="[]">
+      List of user/role/group associations for this step
+      
+      <Expandable title="StepAssociation">
+        <ParamField body="associationType" type="string" required>
+          Type: "user", "role", "group", or "sql_rule"
+        </ParamField>
+        
+        <ParamField body="associationValue" type="string" required>
+          Value identifying the user/role/group (minimum length: 1)
+        </ParamField>
+        
+        <ParamField body="canApprove" type="boolean" default="true">
+          Whether this association can approve
+        </ParamField>
+        
+        <ParamField body="canReject" type="boolean" default="true">
+          Whether this association can reject
+        </ParamField>
+        
+        <ParamField body="canRevert" type="boolean" default="true">
+          Whether this association can revert
+        </ParamField>
+        
+        <ParamField body="priority" type="integer | null" default="null">
+          Priority order for priority_chain mode
+        </ParamField>
+        
+        <ParamField body="notificationOrder" type="integer | null" default="null">
+          Order for sending notifications
+        </ParamField>
+        
+        <ParamField body="escalationAfterSeconds" type="integer | null" default="null">
+          Seconds before escalating to this association
+        </ParamField>
+      </Expandable>
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+<ParamField body="transitions" type="array" required>
+  Array of workflow transition definitions. Must connect all non-terminal steps.
+  
+  <Expandable title="WorkflowTransitionInput">
+    <ParamField body="fromStepCode" type="string" required>
+      Source step code (must exist in steps array)
+    </ParamField>
+    
+    <ParamField body="toStepCode" type="string | null" default="null">
+      Target step code (must exist in steps array, or null for terminal transitions)
+    </ParamField>
+    
+    <ParamField body="actionType" type="string" required>
+      Action triggering this transition: "approve", "reject", "revert", or "custom"
+    </ParamField>
+    
+    <ParamField body="actionCode" type="string | null" default="null">
+      Custom action code (required when actionType is "custom")
+    </ParamField>
+    
+    <ParamField body="transitionLabel" type="string" default="">
+      Display label for the transition
+    </ParamField>
+    
+    <ParamField body="description" type="string" default="">
+      Description of the transition
+    </ParamField>
+    
+    <ParamField body="conditionExpression" type="string | null" default="null">
+      Optional condition expression for conditional transitions
+    </ParamField>
+    
+    <ParamField body="priority" type="integer" default="0">
+      Priority for evaluating multiple transitions (lower values evaluated first)
+    </ParamField>
+  </Expandable>
+</ParamField>
+
+## Validation Rules
+
+The workflow definition is validated with the following rules:
+
+- **Step codes must be unique** within the workflow
+- **Exactly one start step** is required (stepType: "start")
+- **At least one terminal or end step** is required (isTerminal: true or stepType: "end")
+- **All transition step codes must exist** in the steps array
+- **Custom action transitions** must include an actionCode
+- **No unconditional self-loops** are allowed
+- **Only one unconditional transition** per source step and action type
+- **Subworkflow steps** must include a subworkflowMapping
+- **Non-terminal steps** must have at least one outgoing transition
+- **All steps must be reachable** from the start step
+- **Cycles without guards** are not allowed (cycles must have at least one step with maxVisitsPerInstance set)
+
+## Response
+
+Returns the created workflow definition with full details. Status code: 201 Created.
+
+<ResponseField name="item" type="object" required>
+  The created workflow definition (same structure as GET /api/v1/workflow-definitions/{definition_id})
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X POST https://api.example.com/api/v1/workflow-definitions \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "key": "simple-approval",
+    "name": "Simple Approval Workflow",
+    "description": "A simple two-step approval process",
+    "steps": [
+      {
+        "stepCode": "start",
+        "stepLabel": "Start",
+        "stepType": "start",
+        "assignmentPolicy": {
+          "approvalMode": "priority_chain"
+        },
+        "associations": []
+      },
+      {
+        "stepCode": "manager_approval",
+        "stepLabel": "Manager Approval",
+        "stepType": "human_task",
+        "remarkRequiredOnReject": true,
+        "assignmentPolicy": {
+          "approvalMode": "approve_any_one"
+        },
+        "associations": [
+          {
+            "associationType": "role",
+            "associationValue": "manager",
+            "canApprove": true,
+            "canReject": true
+          }
+        ]
+      },
+      {
+        "stepCode": "end",
+        "stepLabel": "End",
+        "stepType": "end",
+        "assignmentPolicy": {
+          "approvalMode": "priority_chain"
+        },
+        "associations": []
+      }
+    ],
+    "transitions": [
+      {
+        "fromStepCode": "start",
+        "toStepCode": "manager_approval",
+        "actionType": "approve",
+        "transitionLabel": "Submit"
+      },
+      {
+        "fromStepCode": "manager_approval",
+        "toStepCode": "end",
+        "actionType": "approve",
+        "transitionLabel": "Approve"
+      },
+      {
+        "fromStepCode": "manager_approval",
+        "toStepCode": "end",
+        "actionType": "reject",
+        "transitionLabel": "Reject"
+      }
+    ]
+  }'
+```
+
+## Example Response
+
+```json
+{
+  "item": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "key": "simple-approval",
+    "name": "Simple Approval Workflow",
+    "description": "A simple two-step approval process",
+    "status": "draft",
+    "latestVersionId": "660e8400-e29b-41d4-a716-446655440001",
+    "latestVersionNo": 1,
+    "graphJson": {
+      "workflow": {
+        "key": "simple-approval",
+        "name": "Simple Approval Workflow",
+        "description": "A simple two-step approval process"
+      },
+      "steps": [...],
+      "transitions": [...]
+    },
+    "builderLayout": {
+      "nodes": [...],
+      "edges": [...],
+      "viewport": {"x": 0, "y": 0, "zoom": 1}
+    },
+    "steps": [...],
+    "transitions": [...]
+  }
+}
+```
+
+## Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication token is missing or invalid
+</ResponseField>
+
+<ResponseField name="409" type="Conflict">
+  Workflow key already exists
+  
+  ```json
+  {
+    "detail": "Workflow key already exists."
+  }
+  ```
+</ResponseField>
+
+<ResponseField name="422" type="Unprocessable Entity">
+  Validation errors in the workflow definition
+  
+  ```json
+  {
+    "detail": {
+      "errors": [
+        "Exactly one start step is required.",
+        "Step 'approval' must have at least one outgoing transition."
+      ]
+    }
+  }
+  ```
+</ResponseField>
+
+<Note>
+New workflow definitions are created in "draft" status. Use the publish endpoint to activate them.
+</Note>
+
+<Note>
+If builderLayout is not provided, the system will automatically generate a visual layout based on the steps and transitions.
+</Note>

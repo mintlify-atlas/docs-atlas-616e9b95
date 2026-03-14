@@ -1,0 +1,318 @@
+---
+title: Static vs Runtime Separation
+description: Understanding the separation between workflow definitions and execution state
+---
+
+The Workflow Engine Platform strictly separates **static definition data** from **runtime execution data**. This architectural decision is fundamental to the system's correctness and flexibility.
+
+## Why Separate Static and Runtime?
+
+### Versioning Without Corruption
+
+Workflow definitions can be edited and versioned without corrupting in-flight workflows:
+
+- A running workflow always references a specific **immutable** version snapshot
+- Admins can create new versions and update definitions while workflows execute
+- Runtime instances remain unaffected by definition changes
+
+### Clear Separation of Concerns
+
+**Static tables** answer: "What is this workflow?"
+- Structure, rules, policies
+- Step definitions and transitions
+- Assignee rules and approval modes
+- Notification templates
+
+**Runtime tables** answer: "What is happening right now?"
+- Current execution state
+- Pending work items
+- Action history
+- Variable values
+
+### Independent Lifecycle
+
+Static and runtime data have different lifecycles:
+
+| Aspect | Static | Runtime |
+|--------|--------|----------|
+| **Created** | Design time | Execution time |
+| **Mutability** | Versioned snapshots | Constantly changing |
+| **Retention** | Long-term (years) | Variable (days to months) |
+| **Volume** | Low (hundreds) | High (millions) |
+| **Access Pattern** | Read-heavy | Read/write mixed |
+
+## Static Side Tables
+
+Static tables store workflow **definitions** and **configuration**.
+
+### Core Static Tables
+
+1. **workflow_definition** - Top-level workflow identity and metadata
+2. **workflow_definition_version** - Immutable versioned snapshots
+3. **workflow_step_definition** - Step definitions within a version
+4. **workflow_step_association** - Who can act on each step
+5. **workflow_step_assignment_policy** - Approval and escalation rules
+6. **workflow_transition_definition** - Edges between steps
+7. **workflow_step_mapping** - Subworkflow configuration
+8. **notification_template** - User-configurable message templates
+
+### Static Data Characteristics
+
+**Immutability**: Once a version is published, its steps and transitions cannot change. New edits create a new version.
+
+**Validation**: All static data is validated before publishing:
+```python
+# From apps/api/src/api/workflows.py:72
+def _validate_workflow(payload: WorkflowDefinitionCreate):
+    # Exactly one start step
+    # At least one terminal step
+    # All steps reachable from start
+    # No unconditional self-loops
+    # All transitions have valid targets
+    # Cycles have maxVisitsPerInstance guards
+```
+
+**Versioning**: Each save creates a new version number:
+```sql
+INSERT INTO workflow_definition_version (
+    workflow_definition_id,
+    version_no,  -- Auto-incremented: 1, 2, 3...
+    graph_json,
+    builder_layout,
+    created_by
+) VALUES (...);
+```
+
+## Runtime Side Tables
+
+Runtime tables store workflow **execution state** and **history**.
+
+### Core Runtime Tables
+
+1. **workflow_instance** - Running workflow state
+2. **workflow_instance_data** - Variable storage (input, context, output)
+3. **step_instance** - Each step entry during execution
+4. **human_task** - Actionable work items in user inboxes
+5. **workflow_action** - Full audit trail of every action
+6. **workflow_status_history** - Lifecycle transitions
+7. **subworkflow_link** - Parent-child workflow relationships
+8. **notification** - In-app notifications
+9. **outbox_event** - Pending messages for RabbitMQ
+
+### Runtime Data Characteristics
+
+**High Volume**: One workflow instance can create:
+- 1 workflow_instance row
+- 1 workflow_instance_data row
+- N step_instance rows (one per step visit)
+- N human_task rows (one per assignee per step)
+- N workflow_action rows (audit trail)
+- N notification rows
+- N outbox_event rows
+
+**Mutable State**: Runtime data changes constantly:
+```python
+# From apps/api/src/api/runtime.py:837
+def _enter_step(cursor, workflow_instance, step_definition, trigger_action):
+    # Create new step instance
+    # Update workflow current step pointer
+    # Create human tasks if needed
+    # Update workflow status
+    # Record status history
+```
+
+**Transactional**: All state changes happen in database transactions to ensure consistency.
+
+## The Link: Version Reference
+
+Runtime instances reference **specific published versions**:
+
+```sql
+-- Runtime instance points to immutable version
+CREATE TABLE workflow_instance (
+    id uuid PRIMARY KEY,
+    workflow_version_id uuid NOT NULL REFERENCES workflow_definition_version(id),
+    status text NOT NULL,
+    ...
+);
+```
+
+This link is **immutable**—once set, it never changes for that instance.
+
+## Example: Invoice Approval Evolution
+
+### Initial Design (Version 1)
+
+```
+Static:
+- Definition: "Invoice Approval" (key: invoice_approval)
+- Version 1 (published)
+  - Steps: start → manager_review → end
+  - Transitions: approve only
+
+Runtime:
+- Instance #123 → references version 1
+- Currently at: manager_review (waiting)
+```
+
+### Enhanced Design (Version 2)
+
+Admin adds finance review step:
+
+```
+Static:
+- Definition: "Invoice Approval" (unchanged)
+- Version 1 (still exists, no longer published)
+  - Steps: start → manager_review → end
+- Version 2 (newly published)
+  - Steps: start → manager_review → finance_review → end
+  - Transitions: approve with revert support
+
+Runtime:
+- Instance #123 → STILL references version 1
+  - Executes with old 2-step flow
+  - Unaffected by version 2
+- Instance #456 (new) → references version 2
+  - Executes with new 3-step flow
+```
+
+### Key Insight
+
+Instance #123 continues executing with the exact step structure it started with. No surprises, no migration, no corruption.
+
+## Querying Across the Boundary
+
+Join runtime to static for display:
+
+```sql
+-- Get current step details for a running instance
+SELECT 
+    wi.id,
+    wi.status,
+    sd.step_code,
+    sd.step_label,
+    sd.step_type
+FROM workflow_instance wi
+JOIN step_instance si ON si.id = wi.current_step_instance_id
+JOIN workflow_step_definition sd ON sd.id = si.step_definition_id
+WHERE wi.id = $1;
+```
+
+This query spans both sides:
+- `workflow_instance` and `step_instance` are runtime
+- `workflow_step_definition` is static
+
+## Design Patterns
+
+### Pattern 1: Snapshot on Start
+
+```python
+# From apps/api/src/api/runtime.py:1077
+def start_workflow_instance(payload, user):
+    # Resolve latest published version
+    version = _resolve_version(cursor, workflow_key=payload.workflowKey)
+    
+    # Lock to this version forever
+    cursor.execute(
+        "INSERT INTO workflow_instance (workflow_version_id, ...) VALUES (%s, ...)",
+        (version["id"], ...)
+    )
+```
+
+### Pattern 2: Copy Policy to Tasks
+
+```python
+# From apps/api/src/api/runtime.py:384
+approval_mode = policy["approval_mode"] if policy else "priority_chain"
+
+cursor.execute(
+    "INSERT INTO human_task (approval_mode_snapshot, ...) VALUES (%s, ...)",
+    (approval_mode, ...)
+)
+```
+
+The runtime task stores a **snapshot** of the policy so it remains consistent even if the definition changes.
+
+### Pattern 3: Denormalize for Performance
+
+```python
+# workflow_definition_version stores redundant data
+graph_json          # Canonical JSON of all steps and transitions
+builder_layout      # React Flow visual coordinates
+definition_snapshot # Full create payload for cloning
+```
+
+This redundancy makes querying faster and ensures runtime workflows have everything needed.
+
+## Benefits of This Architecture
+
+<AccordionGroup>
+  <Accordion title="Safe Evolution">
+    Workflow definitions can evolve without risk:
+    - Add new steps
+    - Change approval policies
+    - Update notification messages
+    - Fix validation rules
+    
+    All changes apply only to **new instances**.
+  </Accordion>
+
+  <Accordion title="Predictable Execution">
+    Users and systems can trust that workflows execute exactly as defined at start time:
+    - No mid-flight rule changes
+    - No missing steps
+    - No policy mutations
+  </Accordion>
+
+  <Accordion title="Audit and Compliance">
+    Full traceability:
+    - Which version was used?
+    - What were the exact rules?
+    - Who approved what?
+    - When did state change?
+  </Accordion>
+
+  <Accordion title="Performance Optimization">
+    Different access patterns, different indexes:
+    - Static: Read-heavy, heavily cached
+    - Runtime: Write-heavy, transactional
+    
+    Can even use separate databases if needed.
+  </Accordion>
+</AccordionGroup>
+
+## Common Pitfalls to Avoid
+
+<Warning>
+  **Don't** join runtime to mutable definition rows directly. Always join through the versioned snapshot.
+  
+  ```sql
+  -- BAD: Joins to current definition
+  SELECT * FROM workflow_instance wi
+  JOIN workflow_definition wd ON wd.key = 'invoice_approval';
+  
+  -- GOOD: Joins through version
+  SELECT * FROM workflow_instance wi
+  JOIN workflow_definition_version wdv ON wdv.id = wi.workflow_version_id
+  JOIN workflow_definition wd ON wd.id = wdv.workflow_definition_id;
+  ```
+</Warning>
+
+<Warning>
+  **Don't** update static data after publishing. Create a new version instead.
+</Warning>
+
+<Warning>
+  **Don't** delete versions that have active runtime instances. Archive or mark inactive instead.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Database Schema" icon="database" href="./database-schema">
+    See complete table definitions
+  </Card>
+  <Card title="Execution Model" icon="gears" href="./execution-model">
+    How workflows execute step-by-step
+  </Card>
+</CardGroup>

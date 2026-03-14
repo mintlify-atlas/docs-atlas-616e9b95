@@ -1,0 +1,587 @@
+---
+title: Creating Workflows
+description: Complete guide to creating workflow definitions via API, defining steps, configuring transitions, and publishing
+---
+
+## Overview
+
+Workflow definitions are the templates for your business processes. This guide walks you through creating a complete workflow definition using the API, including steps, transitions, assignment policies, and notification templates.
+
+## Prerequisites
+
+- Valid authentication token from Better Auth
+- API base URL (default: `http://localhost:8000`)
+- At least one user account for assignment
+
+## Workflow Definition Structure
+
+A workflow definition consists of:
+
+- **Metadata**: Key, name, and description
+- **Steps**: Individual stages in your workflow
+- **Transitions**: Connections between steps
+- **Assignment policies**: Who can act on each step
+- **Notification templates**: Custom messages for users
+
+## Creating Your First Workflow
+
+<Steps>
+
+### Step 1: Define the workflow metadata
+
+Start by defining the top-level properties:
+
+```json
+{
+  "key": "vendor_onboarding",
+  "name": "Vendor Onboarding",
+  "description": "Approve vendor onboarding with manager review and escalation"
+}
+```
+
+<Note>
+The `key` must be unique across all workflow definitions. Use snake_case for consistency.
+</Note>
+
+### Step 2: Add workflow steps
+
+Define each step in your workflow. Every workflow must have exactly one `start` step and at least one `end` or terminal step.
+
+```json
+{
+  "steps": [
+    {
+      "stepCode": "start_request",
+      "stepLabel": "Start Request",
+      "description": "Entry point for the workflow",
+      "stepType": "start",
+      "sequenceHint": 0,
+      "allowRevert": false,
+      "remarkRequiredOnApprove": false,
+      "remarkRequiredOnReject": false,
+      "remarkRequiredOnRevert": false,
+      "maxVisitsPerInstance": null,
+      "isTerminal": false,
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain",
+        "requiredApprovalsCount": null,
+        "priorityEscalationEnabled": false,
+        "escalationTimeoutSeconds": null,
+        "reminderIntervalSeconds": null,
+        "maxEscalationCount": null
+      },
+      "associations": []
+    },
+    {
+      "stepCode": "manager_approval",
+      "stepLabel": "Manager Approval",
+      "description": "Manager reviews and approves the vendor",
+      "stepType": "human_task",
+      "sequenceHint": 1,
+      "allowRevert": true,
+      "remarkRequiredOnApprove": false,
+      "remarkRequiredOnReject": true,
+      "remarkRequiredOnRevert": true,
+      "maxVisitsPerInstance": 3,
+      "isTerminal": false,
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain",
+        "requiredApprovalsCount": null,
+        "priorityEscalationEnabled": true,
+        "escalationTimeoutSeconds": 86400,
+        "reminderIntervalSeconds": 43200,
+        "maxEscalationCount": 2
+      },
+      "associations": [
+        {
+          "associationType": "user",
+          "associationValue": "manager@example.com",
+          "priority": 1,
+          "notificationOrder": 1,
+          "escalationAfterSeconds": 86400,
+          "canApprove": true,
+          "canReject": true,
+          "canRevert": true
+        },
+        {
+          "associationType": "user",
+          "associationValue": "reviewer1@example.com",
+          "priority": 2,
+          "notificationOrder": 2,
+          "escalationAfterSeconds": 172800,
+          "canApprove": true,
+          "canReject": true,
+          "canRevert": false
+        }
+      ]
+    },
+    {
+      "stepCode": "completed",
+      "stepLabel": "Completed",
+      "description": "Workflow completed successfully",
+      "stepType": "end",
+      "sequenceHint": 2,
+      "allowRevert": false,
+      "remarkRequiredOnApprove": false,
+      "remarkRequiredOnReject": false,
+      "remarkRequiredOnRevert": false,
+      "maxVisitsPerInstance": null,
+      "isTerminal": true,
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain",
+        "requiredApprovalsCount": null,
+        "priorityEscalationEnabled": false,
+        "escalationTimeoutSeconds": null,
+        "reminderIntervalSeconds": null,
+        "maxEscalationCount": null
+      },
+      "associations": []
+    }
+  ]
+}
+```
+
+#### Step Types
+
+- **start**: Entry point (required, exactly one)
+- **end**: Terminal success step
+- **human_task**: Requires user action (approve/reject/revert)
+- **system_task**: Automated step
+- **subworkflow**: Triggers a child workflow
+- **decision**: Conditional branching
+
+### Step 3: Configure assignment policies
+
+Each human task step requires an assignment policy that determines how tasks are distributed:
+
+#### Approval Modes
+
+<CodeGroup>
+
+```json Priority Chain
+{
+  "approvalMode": "priority_chain",
+  "priorityEscalationEnabled": true,
+  "escalationTimeoutSeconds": 86400,
+  "reminderIntervalSeconds": 43200,
+  "maxEscalationCount": 2
+}
+```
+
+```json Approve Any One
+{
+  "approvalMode": "approve_any_one",
+  "requiredApprovalsCount": null,
+  "priorityEscalationEnabled": false
+}
+```
+
+```json Approve All
+{
+  "approvalMode": "approve_all",
+  "requiredApprovalsCount": 3,
+  "priorityEscalationEnabled": false
+}
+```
+
+</CodeGroup>
+
+- **priority_chain**: Notify users sequentially by priority, escalating after timeout
+- **approve_any_one**: Notify all users, first approval completes the step
+- **approve_all**: Notify all users, all must approve
+- **notify_all**: Notify everyone (custom policy logic)
+
+### Step 4: Add step associations
+
+Define who can act on each step:
+
+```json
+{
+  "associations": [
+    {
+      "associationType": "user",
+      "associationValue": "manager@example.com",
+      "priority": 1,
+      "notificationOrder": 1,
+      "escalationAfterSeconds": 86400,
+      "canApprove": true,
+      "canReject": true,
+      "canRevert": true
+    }
+  ]
+}
+```
+
+**Association types**:
+- `user`: Direct user assignment (email or user ID)
+- `role`: Assign to all users with a role
+- `group`: Assign to a user group
+
+### Step 5: Define transitions
+
+Connect steps with transitions:
+
+```json
+{
+  "transitions": [
+    {
+      "fromStepCode": "start_request",
+      "toStepCode": "manager_approval",
+      "actionType": "approve",
+      "actionCode": null,
+      "transitionLabel": "submit",
+      "description": "Submit for manager approval",
+      "conditionExpression": null,
+      "priority": 0
+    },
+    {
+      "fromStepCode": "manager_approval",
+      "toStepCode": "completed",
+      "actionType": "approve",
+      "actionCode": null,
+      "transitionLabel": "approve",
+      "description": "Manager approves the request",
+      "conditionExpression": null,
+      "priority": 0
+    },
+    {
+      "fromStepCode": "manager_approval",
+      "toStepCode": "start_request",
+      "actionType": "revert",
+      "actionCode": null,
+      "transitionLabel": "revert",
+      "description": "Send back for revision",
+      "conditionExpression": null,
+      "priority": 1
+    }
+  ]
+}
+```
+
+**Action types**:
+- `approve`: Move forward
+- `reject`: Reject and end workflow
+- `revert`: Send back to previous step
+- `custom`: Custom action with actionCode
+
+### Step 6: Add notification templates
+
+Customize the messages users receive:
+
+```json
+{
+  "stepCode": "manager_approval",
+  "notificationTemplate": {
+    "titleTemplate": "Approval needed: {stepLabel}",
+    "bodyTemplate": "{workflowName} is waiting for your action on {stepCode}. Assigned to {actorEmail}.",
+    "allowActorOverride": true
+  }
+}
+```
+
+**Available template variables**:
+- `{workflowName}`: Workflow definition name
+- `{stepLabel}`: Step display label
+- `{stepCode}`: Step code identifier
+- `{actorEmail}`: Assignee email address
+
+### Step 7: Create the workflow definition
+
+Send a POST request to create the workflow:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/workflow-definitions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d @workflow-definition.json
+```
+
+**Response**:
+
+```json
+{
+  "item": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "key": "vendor_onboarding",
+    "name": "Vendor Onboarding",
+    "status": "draft",
+    "latestVersionId": "660e8400-e29b-41d4-a716-446655440000",
+    "latestVersionNo": 1,
+    "steps": [...],
+    "transitions": [...]
+  }
+}
+```
+
+### Step 8: Validate the workflow
+
+The API automatically validates:
+
+<Check>Exactly one start step exists</Check>
+<Check>At least one terminal step exists</Check>
+<Check>All steps are reachable from start</Check>
+<Check>All non-terminal steps have outgoing transitions</Check>
+<Check>No unconditional self-loops</Check>
+<Check>Cycles have maxVisitsPerInstance guards</Check>
+
+If validation fails, you'll receive detailed error messages:
+
+```json
+{
+  "detail": {
+    "errors": [
+      "Exactly one start step is required.",
+      "Step 'manager_approval' must have at least one outgoing transition."
+    ]
+  }
+}
+```
+
+### Step 9: Update an existing workflow
+
+To create a new version of a workflow:
+
+```bash
+curl -X PUT http://localhost:8000/api/v1/workflow-definitions/{definition_id} \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d @updated-workflow.json
+```
+
+This creates a new version while preserving the definition ID. The `version_no` increments automatically.
+
+### Step 10: Publish the workflow
+
+Only published workflows can be instantiated:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/workflow-definitions/{definition_id}/publish \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Publishing marks the latest version as active and sets the workflow status to `active`.
+
+</Steps>
+
+## Loop Guards and Revisits
+
+To allow workflows to loop back (e.g., for revert actions), set `maxVisitsPerInstance`:
+
+```json
+{
+  "stepCode": "manager_approval",
+  "maxVisitsPerInstance": 3
+}
+```
+
+This prevents infinite loops by limiting how many times a step can be visited in a single workflow instance.
+
+## Subworkflow Mapping
+
+For complex processes, trigger child workflows:
+
+```json
+{
+  "stepCode": "background_check",
+  "stepType": "subworkflow",
+  "subworkflowMapping": {
+    "childWorkflowDefinitionId": "770e8400-e29b-41d4-a716-446655440000",
+    "childWorkflowVersionId": null,
+    "triggerMode": "sync_wait",
+    "inputMapping": {
+      "vendorId": "$.vendorId",
+      "requestedBy": "$.startedBy"
+    },
+    "outputMapping": {
+      "checkResult": "$.status",
+      "checkDate": "$.completedAt"
+    },
+    "completionAction": "approve",
+    "failureAction": "reject"
+  }
+}
+```
+
+The parent workflow pauses while the child runs, then resumes with mapped output data.
+
+## Best Practices
+
+<AccordionGroup>
+
+<Accordion title="Use descriptive step codes">
+Choose step codes that clearly indicate the step's purpose: `manager_approval`, `legal_review`, `final_approval`.
+</Accordion>
+
+<Accordion title="Set appropriate timeouts">
+- Escalation timeout: 24-48 hours typical
+- Reminder interval: 12-24 hours typical
+- Max escalation count: 2-3 levels
+</Accordion>
+
+<Accordion title="Require remarks on rejection">
+Always set `remarkRequiredOnReject: true` to capture the reason for rejection.
+</Accordion>
+
+<Accordion title="Plan for reverts">
+Include revert transitions to allow workflows to loop back for corrections.
+</Accordion>
+
+<Accordion title="Test with draft status first">
+Create and test workflows in draft mode before publishing.
+</Accordion>
+
+</AccordionGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+
+<Accordion title="Validation error: 'Step codes must be unique'">
+Ensure all `stepCode` values are unique within the workflow definition.
+</Accordion>
+
+<Accordion title="Validation error: 'Unconditional self-loop detected'">
+Add a `conditionExpression` or set `maxVisitsPerInstance` on the step.
+</Accordion>
+
+<Accordion title="Validation error: 'Every step must be reachable'">
+Check that all steps have incoming transitions from the start step or other reachable steps.
+</Accordion>
+
+<Accordion title="HTTP 409 Conflict">
+The workflow `key` already exists. Choose a different key or update the existing workflow.
+</Accordion>
+
+</AccordionGroup>
+
+## Complete Example
+
+Here's a complete workflow definition with all features:
+
+```json
+{
+  "key": "vendor_onboarding",
+  "name": "Vendor Onboarding",
+  "description": "Multi-stage vendor approval with escalation",
+  "steps": [
+    {
+      "stepCode": "start_request",
+      "stepLabel": "Start Request",
+      "description": "Entry point",
+      "stepType": "start",
+      "sequenceHint": 0,
+      "allowRevert": false,
+      "remarkRequiredOnApprove": false,
+      "remarkRequiredOnReject": false,
+      "remarkRequiredOnRevert": false,
+      "maxVisitsPerInstance": null,
+      "isTerminal": false,
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain",
+        "requiredApprovalsCount": null,
+        "priorityEscalationEnabled": false,
+        "escalationTimeoutSeconds": null,
+        "reminderIntervalSeconds": null,
+        "maxEscalationCount": null
+      },
+      "associations": []
+    },
+    {
+      "stepCode": "manager_approval",
+      "stepLabel": "Manager Approval",
+      "description": "Manager reviews vendor",
+      "stepType": "human_task",
+      "sequenceHint": 1,
+      "allowRevert": true,
+      "remarkRequiredOnApprove": false,
+      "remarkRequiredOnReject": true,
+      "remarkRequiredOnRevert": true,
+      "maxVisitsPerInstance": 3,
+      "isTerminal": false,
+      "notificationTemplate": {
+        "titleTemplate": "Vendor approval needed",
+        "bodyTemplate": "Please review the vendor onboarding request.",
+        "allowActorOverride": true
+      },
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain",
+        "requiredApprovalsCount": null,
+        "priorityEscalationEnabled": true,
+        "escalationTimeoutSeconds": 86400,
+        "reminderIntervalSeconds": 43200,
+        "maxEscalationCount": 2
+      },
+      "associations": [
+        {
+          "associationType": "user",
+          "associationValue": "manager@example.com",
+          "priority": 1,
+          "notificationOrder": 1,
+          "escalationAfterSeconds": 86400,
+          "canApprove": true,
+          "canReject": true,
+          "canRevert": true
+        }
+      ]
+    },
+    {
+      "stepCode": "completed",
+      "stepLabel": "Completed",
+      "description": "Success",
+      "stepType": "end",
+      "sequenceHint": 2,
+      "allowRevert": false,
+      "remarkRequiredOnApprove": false,
+      "remarkRequiredOnReject": false,
+      "remarkRequiredOnRevert": false,
+      "maxVisitsPerInstance": null,
+      "isTerminal": true,
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain",
+        "requiredApprovalsCount": null,
+        "priorityEscalationEnabled": false,
+        "escalationTimeoutSeconds": null,
+        "reminderIntervalSeconds": null,
+        "maxEscalationCount": null
+      },
+      "associations": []
+    }
+  ],
+  "transitions": [
+    {
+      "fromStepCode": "start_request",
+      "toStepCode": "manager_approval",
+      "actionType": "approve",
+      "actionCode": null,
+      "transitionLabel": "submit",
+      "description": "Submit for approval",
+      "conditionExpression": null,
+      "priority": 0
+    },
+    {
+      "fromStepCode": "manager_approval",
+      "toStepCode": "completed",
+      "actionType": "approve",
+      "actionCode": null,
+      "transitionLabel": "approve",
+      "description": "Approve vendor",
+      "conditionExpression": null,
+      "priority": 0
+    }
+  ]
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Workflow Builder" icon="pencil" href="/guides/workflow-builder">
+Use the visual builder to create workflows with a drag-and-drop interface
+</Card>
+
+<Card title="Managing Instances" icon="play" href="/guides/managing-instances">
+Learn how to start and monitor workflow instances
+</Card>
+
+</CardGroup>

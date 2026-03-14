@@ -1,0 +1,671 @@
+---
+title: Steps and Transitions
+description: Learn about step types, transition actions, conditional logic, and visit count tracking in workflow execution
+---
+
+## Overview
+
+Workflows are directed graphs composed of **steps** (nodes) and **transitions** (edges). Steps define what happens at each point in the workflow, while transitions define how the workflow moves from one step to another based on actions.
+
+<Info>
+  Steps are **static definitions**, while step instances are **runtime executions**. A step can be visited multiple times in a single workflow instance.
+</Info>
+
+## Step Types
+
+The engine supports six core step types:
+
+### start
+
+Every workflow must have exactly one start step. This is the entry point for workflow execution.
+
+```json
+{
+  "stepCode": "start",
+  "stepLabel": "Start",
+  "stepType": "start",
+  "isTerminal": false
+}
+```
+
+<Note>
+  Start steps are automatically entered when a workflow instance is created. They typically have a single `approve` transition to the first real step.
+</Note>
+
+### end
+
+Terminal steps that complete the workflow. A workflow must have at least one end or terminal step.
+
+```json
+{
+  "stepCode": "approved",
+  "stepLabel": "Approved",
+  "stepType": "end",
+  "isTerminal": true
+}
+```
+
+From `runtime.py:867-869`:
+
+```python
+if step_definition["step_type"] in {"end"} or step_definition["is_terminal"]:
+    _complete_workflow(cursor, workflow_instance, step_instance, trigger_action)
+    return {"step_instance_id": step_instance["id"], "next_step_code": None}
+```
+
+### human_task
+
+Steps that require human approval, rejection, or other action. The workflow pauses and waits for a user to act.
+
+```json
+{
+  "stepCode": "manager_review",
+  "stepLabel": "Manager Review",
+  "stepType": "human_task",
+  "remarkRequiredOnApprove": false,
+  "remarkRequiredOnReject": true,
+  "remarkRequiredOnRevert": true,
+  "allowRevert": true,
+  "assignmentPolicy": {
+    "approvalMode": "priority_chain",
+    "escalationTimeoutSeconds": 86400
+  },
+  "associations": [
+    {
+      "associationType": "user",
+      "associationValue": "manager@example.com",
+      "priority": 1
+    }
+  ]
+}
+```
+
+From `runtime.py:871-876`:
+
+```python
+if step_definition["step_type"] == "human_task":
+    _create_human_tasks(cursor, workflow_instance, step_instance, step_definition)
+    return {
+        "step_instance_id": step_instance["id"],
+        "next_step_code": step_definition["step_code"],
+    }
+```
+
+See [Human Tasks](/concepts/human-tasks) for detailed information.
+
+### system_task
+
+Automated steps that execute system logic without human intervention. The workflow auto-advances after execution.
+
+```json
+{
+  "stepCode": "send_notification",
+  "stepLabel": "Send Email Notification",
+  "stepType": "system_task",
+  "config": {
+    "handler": "email_notification",
+    "template": "approval_notification"
+  }
+}
+```
+
+From `runtime.py:915-937`:
+
+```python
+# Auto-complete system tasks
+cursor.execute(
+    """
+    UPDATE step_instance
+    SET status = 'completed', completed_at = now(), result_action = %s
+    WHERE id = %s
+    """,
+    (trigger_action, step_instance["id"]),
+)
+
+transition = _transition_for_action(
+    cursor,
+    workflow_instance["workflow_version_id"],
+    step_definition["id"],
+    "approve",
+    None,
+)
+
+if transition is None or transition["to_step_definition_id"] is None:
+    _complete_workflow(cursor, workflow_instance, step_instance, "approve")
+    return {"step_instance_id": step_instance["id"], "next_step_code": None}
+
+next_step = _get_step_by_id(cursor, transition["to_step_definition_id"])
+return _enter_step(cursor, workflow_instance, next_step, "approve")
+```
+
+### subworkflow
+
+Steps that trigger a child workflow. The parent workflow pauses until the child completes.
+
+```json
+{
+  "stepCode": "vendor_verification",
+  "stepLabel": "Verify Vendor",
+  "stepType": "subworkflow",
+  "subworkflowMapping": {
+    "childWorkflowDefinitionId": "uuid-of-vendor-workflow",
+    "triggerMode": "sync_wait",
+    "inputMapping": {
+      "vendorId": "$.vendor.id"
+    },
+    "outputMapping": {
+      "vendorVerified": "$.result.verified"
+    },
+    "completionAction": "approve",
+    "failureAction": "reject"
+  }
+}
+```
+
+From `runtime.py:878-913`:
+
+```python
+if step_definition["step_type"] == "subworkflow":
+    mapping = _get_mapping(cursor, step_definition["id"])
+    if mapping is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Subworkflow step '{step_definition['step_code']}' has no mapping.",
+        )
+
+    cursor.execute(
+        """
+        UPDATE workflow_instance
+        SET status = 'paused', current_step_instance_id = %s, updated_at = now()
+        WHERE id = %s
+        """,
+        (step_instance["id"], workflow_instance["id"]),
+    )
+    _record_status_history(
+        cursor,
+        workflow_instance["id"],
+        workflow_instance["status"],
+        "paused",
+        reason="waiting on subworkflow",
+    )
+    _start_child_workflow_instance(cursor, workflow_instance, step_instance, mapping)
+```
+
+See [Subworkflows](/concepts/subworkflows) for detailed information.
+
+### decision
+
+Logic branching points that evaluate conditions and route to different paths.
+
+```json
+{
+  "stepCode": "check_amount",
+  "stepLabel": "Check Invoice Amount",
+  "stepType": "decision",
+  "config": {
+    "evaluationType": "expression"
+  }
+}
+```
+
+Decision steps use conditional transitions to determine the next step.
+
+## Step Definition Schema
+
+### workflow_step_definition
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | uuid | Step definition ID |
+| `workflow_version_id` | uuid | Parent version reference |
+| `step_code` | text | Unique code within version |
+| `step_label` | text | Display label for UI |
+| `description` | text | Business description |
+| `step_type` | text | One of: `start`, `end`, `human_task`, `system_task`, `subworkflow`, `decision` |
+| `sequence_hint` | int | Ordering hint for builder UI |
+| `allow_revert` | bool | Whether revert action is allowed |
+| `remark_required_on_approve` | bool | Require comment for approve |
+| `remark_required_on_reject` | bool | Require comment for reject |
+| `remark_required_on_revert` | bool | Require comment for revert |
+| `max_visits_per_instance` | int (nullable) | Loop guard - max times this step can be visited |
+| `form_schema` | jsonb | Optional UI form configuration |
+| `config` | jsonb | Step-specific configuration |
+| `is_terminal` | bool | Mark as terminal (ends workflow) |
+| `created_at` | timestamptz | Creation timestamp |
+
+**Unique constraint:** `(workflow_version_id, step_code)`
+
+## Transition Actions
+
+Transitions define how workflows move between steps based on user or system actions.
+
+### Action Types
+
+#### approve
+
+Positive progression - continues the workflow forward.
+
+```json
+{
+  "fromStepCode": "manager_review",
+  "toStepCode": "director_review",
+  "actionType": "approve",
+  "transitionLabel": "Approve",
+  "description": "Manager approves, escalate to director"
+}
+```
+
+#### reject
+
+Negative outcome - typically ends workflow or routes to rejection path.
+
+```json
+{
+  "fromStepCode": "manager_review",
+  "toStepCode": "rejected",
+  "actionType": "reject",
+  "transitionLabel": "Reject",
+  "description": "Manager rejects invoice"
+}
+```
+
+#### revert
+
+Sends workflow back to a previous step for corrections.
+
+```json
+{
+  "fromStepCode": "director_review",
+  "toStepCode": "manager_review",
+  "actionType": "revert",
+  "transitionLabel": "Send Back",
+  "description": "Return to manager for clarification"
+}
+```
+
+<Warning>
+  Steps must have `allowRevert: true` for revert transitions to be available at runtime.
+</Warning>
+
+#### custom
+
+User-defined actions with custom codes.
+
+```json
+{
+  "fromStepCode": "review",
+  "toStepCode": "escalation",
+  "actionType": "custom",
+  "actionCode": "escalate",
+  "transitionLabel": "Escalate",
+  "description": "Escalate to senior management"
+}
+```
+
+From `workflows.py:101-104`:
+
+```python
+if transition.actionType == "custom" and not transition.actionCode:
+    errors.append(
+        f"Transition '{transition.fromStepCode}' -> '{transition.toStepCode}' requires an actionCode."
+    )
+```
+
+## Transition Definition Schema
+
+### workflow_transition_definition
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | uuid | Transition ID |
+| `workflow_version_id` | uuid | Parent version reference |
+| `from_step_definition_id` | uuid | Source step |
+| `to_step_definition_id` | uuid (nullable) | Target step (null for terminal transitions) |
+| `action_type` | text | `approve`, `reject`, `revert`, `custom` |
+| `action_code` | text | Required for custom actions |
+| `transition_label` | text | Label displayed on edge in visual builder |
+| `description` | text | Business description |
+| `condition_expression` | text (nullable) | Optional conditional logic |
+| `priority` | int | Determines evaluation order for conditional transitions |
+| `created_at` | timestamptz | Creation timestamp |
+
+### Validation Rules
+
+From `workflows.py:114-120`:
+
+```python
+if transition.conditionExpression is None:
+    signature = (transition.fromStepCode, transition.actionType)
+    if signature in seen_unconditional:
+        errors.append(
+            "Only one unconditional transition is allowed per source step and action type."
+        )
+    seen_unconditional.add(signature)
+```
+
+**Rules:**
+- Only **one unconditional transition** per `from_step + action_type` combination
+- **Custom actions require `actionCode`**
+- **Conditional transitions can coexist** with different priorities
+- **Unconditional self-loops are forbidden**
+
+## Conditional Transitions
+
+Transitions can include conditional expressions evaluated against workflow context:
+
+```json
+[
+  {
+    "fromStepCode": "check_amount",
+    "toStepCode": "auto_approve",
+    "actionType": "approve",
+    "conditionExpression": "$.amount < 1000",
+    "priority": 1
+  },
+  {
+    "fromStepCode": "check_amount",
+    "toStepCode": "manager_review",
+    "actionType": "approve",
+    "conditionExpression": "$.amount >= 1000 && $.amount < 10000",
+    "priority": 2
+  },
+  {
+    "fromStepCode": "check_amount",
+    "toStepCode": "director_review",
+    "actionType": "approve",
+    "conditionExpression": null,
+    "priority": 3
+  }
+]
+```
+
+<Tip>
+  Use `priority` to control evaluation order. Lower numbers are evaluated first. The first matching transition is taken.
+</Tip>
+
+## Step Instances (Runtime)
+
+When a workflow enters a step, a **step instance** is created:
+
+### step_instance
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | uuid | Step instance ID |
+| `workflow_instance_id` | uuid | Parent workflow instance |
+| `step_definition_id` | uuid | Step definition reference |
+| `attempt_no` | int | Retry attempt number |
+| `visit_count` | int | Number of times this step has been visited in this workflow |
+| `status` | text | `pending`, `active`, `waiting`, `completed`, `rejected`, `reverted`, `failed`, `cancelled` |
+| `entered_at` | timestamptz | When step was entered |
+| `started_at` | timestamptz | When step started executing |
+| `completed_at` | timestamptz | When step completed |
+| `waiting_since` | timestamptz | When step started waiting (for human tasks) |
+| `actor_user_id` | uuid | User who completed the step |
+| `result_action` | text | Action that completed the step |
+| `result_payload` | jsonb | Additional result data |
+| `error_payload` | jsonb | Error details if failed |
+
+### Visit Counts
+
+Steps can be revisited (e.g., after a revert). The visit count increments:
+
+```python
+# From runtime.py:268-277
+def _get_next_visit_count(cursor, workflow_instance_id, step_definition_id) -> int:
+    cursor.execute(
+        """
+        SELECT COUNT(*) AS count
+        FROM step_instance
+        WHERE workflow_instance_id = %s AND step_definition_id = %s
+        """,
+        (workflow_instance_id, step_definition_id),
+    )
+    return cursor.fetchone()["count"] + 1
+```
+
+From `runtime.py:837-856`:
+
+```python
+def _enter_step(cursor, workflow_instance, step_definition, trigger_action: str = "approve"):
+    visit_count = _get_next_visit_count(cursor, workflow_instance["id"], step_definition["id"])
+
+    cursor.execute(
+        """
+        INSERT INTO step_instance (
+            workflow_instance_id,
+            step_definition_id,
+            attempt_no,
+            visit_count,
+            status,
+            entered_at,
+            started_at
+        )
+        VALUES (%s, %s, 1, %s, 'active', now(), now())
+        RETURNING *
+        """,
+        (workflow_instance["id"], step_definition["id"], visit_count),
+    )
+    step_instance = cursor.fetchone()
+```
+
+### Loop Guards
+
+Use `max_visits_per_instance` to prevent infinite loops:
+
+```json
+{
+  "stepCode": "retry_payment",
+  "stepLabel": "Retry Payment",
+  "stepType": "system_task",
+  "maxVisitsPerInstance": 3
+}
+```
+
+The validation checks that cycles have guards:
+
+```python
+# From workflows.py:166-174
+if next_step in active_lookup:
+    cycle = active_stack[active_stack.index(next_step) :]
+    if not any(
+        steps_by_code[item].maxVisitsPerInstance is not None for item in cycle
+    ):
+        errors.append(
+            "Detected a cycle without a maxVisitsPerInstance guard on steps: "
+            + ", ".join(cycle)
+        )
+```
+
+## Transition Resolution
+
+At runtime, transitions are resolved based on action type:
+
+```python
+# From runtime.py:585-592
+def _transition_for_action(cursor, workflow_version_id, from_step_definition_id, action_type, action_code):
+    transitions = _get_transitions(cursor, workflow_version_id, from_step_definition_id, action_type)
+    if action_type == "custom" and action_code:
+        for transition in transitions:
+            if transition["action_code"] == action_code:
+                return transition
+        return None
+    return transitions[0] if transitions else None
+```
+
+Transitions are ordered by priority:
+
+```python
+# From runtime.py:253-265
+def _get_transitions(cursor, workflow_version_id, from_step_definition_id, action_type: str):
+    cursor.execute(
+        """
+        SELECT *
+        FROM workflow_transition_definition
+        WHERE workflow_version_id = %s
+          AND from_step_definition_id = %s
+          AND action_type = %s
+        ORDER BY priority, created_at
+        """,
+        (workflow_version_id, from_step_definition_id, action_type),
+    )
+    return cursor.fetchall()
+```
+
+## Available Actions
+
+The set of available actions for a step is determined by its outgoing transitions:
+
+```python
+# From runtime.py:280-293
+def _available_actions(cursor, workflow_version_id, from_step_definition_id, allow_revert: bool):
+    cursor.execute(
+        """
+        SELECT DISTINCT action_type
+        FROM workflow_transition_definition
+        WHERE workflow_version_id = %s AND from_step_definition_id = %s
+        ORDER BY action_type
+        """,
+        (workflow_version_id, from_step_definition_id),
+    )
+    actions = [row["action_type"] for row in cursor.fetchall()]
+    if not allow_revert:
+        actions = [action for action in actions if action != "revert"]
+    return actions
+```
+
+This list is stored in human tasks for display in the UI.
+
+## Example: Multi-Path Workflow
+
+```json
+{
+  "steps": [
+    {
+      "stepCode": "start",
+      "stepType": "start"
+    },
+    {
+      "stepCode": "amount_check",
+      "stepType": "decision"
+    },
+    {
+      "stepCode": "auto_approve",
+      "stepType": "end",
+      "isTerminal": true
+    },
+    {
+      "stepCode": "manager_review",
+      "stepType": "human_task",
+      "allowRevert": true
+    },
+    {
+      "stepCode": "director_review",
+      "stepType": "human_task"
+    },
+    {
+      "stepCode": "approved",
+      "stepType": "end",
+      "isTerminal": true
+    },
+    {
+      "stepCode": "rejected",
+      "stepType": "end",
+      "isTerminal": true
+    }
+  ],
+  "transitions": [
+    {
+      "fromStepCode": "start",
+      "toStepCode": "amount_check",
+      "actionType": "approve"
+    },
+    {
+      "fromStepCode": "amount_check",
+      "toStepCode": "auto_approve",
+      "actionType": "approve",
+      "conditionExpression": "$.amount < 500",
+      "priority": 1
+    },
+    {
+      "fromStepCode": "amount_check",
+      "toStepCode": "manager_review",
+      "actionType": "approve",
+      "conditionExpression": "$.amount >= 500 && $.amount < 5000",
+      "priority": 2
+    },
+    {
+      "fromStepCode": "amount_check",
+      "toStepCode": "director_review",
+      "actionType": "approve",
+      "priority": 3
+    },
+    {
+      "fromStepCode": "manager_review",
+      "toStepCode": "approved",
+      "actionType": "approve"
+    },
+    {
+      "fromStepCode": "manager_review",
+      "toStepCode": "rejected",
+      "actionType": "reject"
+    },
+    {
+      "fromStepCode": "director_review",
+      "toStepCode": "manager_review",
+      "actionType": "revert",
+      "transitionLabel": "Send Back to Manager"
+    },
+    {
+      "fromStepCode": "director_review",
+      "toStepCode": "approved",
+      "actionType": "approve"
+    },
+    {
+      "fromStepCode": "director_review",
+      "toStepCode": "rejected",
+      "actionType": "reject"
+    }
+  ]
+}
+```
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Use Clear Labels" icon="tag">
+    Make transition labels descriptive ("Approve and Forward", not just "Approve")
+  </Card>
+  
+  <Card title="Guard Loops" icon="shield">
+    Always set maxVisitsPerInstance on steps that can be revisited
+  </Card>
+  
+  <Card title="Prioritize Conditions" icon="list-ol">
+    Order conditional transitions from most specific to most general
+  </Card>
+  
+  <Card title="Terminal Paths" icon="flag-checkered">
+    Ensure all execution paths can reach a terminal step
+  </Card>
+</CardGroup>
+
+## Related Concepts
+
+<CardGroup cols={2}>
+  <Card title="Workflow Definitions" icon="diagram-project" href="/concepts/workflow-definitions">
+    Learn about workflow templates and versioning
+  </Card>
+  
+  <Card title="Human Tasks" icon="user-check" href="/concepts/human-tasks">
+    Understand human approval steps
+  </Card>
+  
+  <Card title="Approval Modes" icon="users" href="/concepts/approval-modes">
+    Learn about task assignment strategies
+  </Card>
+  
+  <Card title="Subworkflows" icon="diagram-nested" href="/concepts/subworkflows">
+    Understand child workflow steps
+  </Card>
+</CardGroup>

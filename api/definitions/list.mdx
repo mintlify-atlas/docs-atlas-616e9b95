@@ -1,0 +1,116 @@
+---
+title: "List Workflow Definitions"
+description: "Retrieve all workflow definitions with summary information"
+---
+
+## Overview
+
+Retrieve a list of all workflow definitions in the system. Each item includes summary information such as name, status, version details, and counts of steps and transitions.
+
+## Endpoint
+
+```
+GET /api/v1/workflow-definitions
+```
+
+## Authentication
+
+This endpoint requires authentication. Include a valid authentication token in your request.
+
+## Request Parameters
+
+This endpoint does not accept any query parameters or request body.
+
+## Response
+
+Returns a list of workflow definition summaries.
+
+<ResponseField name="items" type="array" required>
+  Array of workflow definition summaries
+  
+  <Expandable title="WorkflowDefinitionSummary">
+    <ResponseField name="id" type="string (UUID)" required>
+      Unique identifier for the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="key" type="string" required>
+      Unique key for the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="name" type="string" required>
+      Display name of the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="description" type="string" required>
+      Description of the workflow definition
+    </ResponseField>
+    
+    <ResponseField name="status" type="string" required>
+      Current status of the workflow (e.g., "draft", "active")
+    </ResponseField>
+    
+    <ResponseField name="latestVersionId" type="string (UUID) | null" required>
+      ID of the latest version
+    </ResponseField>
+    
+    <ResponseField name="latestVersionNo" type="integer | null" required>
+      Version number of the latest version
+    </ResponseField>
+    
+    <ResponseField name="stepCount" type="integer" required>
+      Total number of steps in the workflow
+    </ResponseField>
+    
+    <ResponseField name="transitionCount" type="integer" required>
+      Total number of transitions in the workflow
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Example Request
+
+```bash
+curl -X GET https://api.example.com/api/v1/workflow-definitions \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+## Example Response
+
+```json
+{
+  "items": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "key": "expense-approval",
+      "name": "Expense Approval Workflow",
+      "description": "Multi-level approval workflow for expense requests",
+      "status": "active",
+      "latestVersionId": "660e8400-e29b-41d4-a716-446655440001",
+      "latestVersionNo": 3,
+      "stepCount": 5,
+      "transitionCount": 8
+    },
+    {
+      "id": "770e8400-e29b-41d4-a716-446655440002",
+      "key": "leave-request",
+      "name": "Leave Request Workflow",
+      "description": "Employee leave request approval process",
+      "status": "draft",
+      "latestVersionId": "880e8400-e29b-41d4-a716-446655440003",
+      "latestVersionNo": 1,
+      "stepCount": 3,
+      "transitionCount": 4
+    }
+  ]
+}
+```
+
+## Error Responses
+
+<ResponseField name="401" type="Unauthorized">
+  Authentication token is missing or invalid
+</ResponseField>
+
+<Note>
+The list is ordered by creation date in descending order (newest first).
+</Note>

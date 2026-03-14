@@ -1,0 +1,413 @@
+---
+title: Database Schema
+description: Complete database schema for the Workflow Engine Platform
+---
+
+The database schema is divided into **static tables** (workflow definitions) and **runtime tables** (execution state).
+
+## Static Tables
+
+Static tables describe what a workflow is. These tables are versioned and immutable once published.
+
+### workflow_definition
+
+Top-level business workflow identity.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | Stable definition ID |
+| key | text unique | Machine key like `invoice_approval` |
+| name | text | Display name |
+| description | text | Business description |
+| status | text | `draft`, `active`, `archived` |
+| created_by | uuid | Creator user ID |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+### workflow_definition_version
+
+Immutable versioned snapshot. Runtime instances point here, not to the mutable parent row.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_definition_id | uuid fk | Parent definition |
+| version_no | int | 1, 2, 3... |
+| is_published | bool | Only one published version at a time |
+| version_label | text | Optional semantic label |
+| definition_snapshot | jsonb | Optional denormalized export |
+| graph_json | jsonb | Canonical JSON from steps and transitions |
+| builder_layout | jsonb | React Flow nodes, edges, viewport |
+| created_by | uuid | |
+| created_at | timestamptz | |
+
+**Unique key**: `(workflow_definition_id, version_no)`
+
+### workflow_step_definition
+
+Defines individual steps within a workflow version.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_version_id | uuid fk | |
+| step_code | text | Unique within version |
+| step_label | text | Display label |
+| description | text | |
+| step_type | text | `start`, `end`, `human_task`, `system_task`, `subworkflow`, `decision` |
+| sequence_hint | int | Builder ordering only |
+| allow_revert | bool | Whether revert is valid |
+| remark_required_on_approve | bool | |
+| remark_required_on_reject | bool | |
+| remark_required_on_revert | bool | |
+| max_visits_per_instance | int nullable | Loop guard for cycles |
+| form_schema | jsonb | Optional payload/UI schema |
+| config | jsonb | Handler config, retry policy |
+| is_terminal | bool | |
+| created_at | timestamptz | |
+
+**Unique key**: `(workflow_version_id, step_code)`
+
+### workflow_step_association
+
+Defines who can act on a step. Rule-based instead of direct-user only.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| step_definition_id | uuid fk | |
+| association_type | text | `user`, `role`, `group`, `sql_rule` |
+| association_value | text | User ID, role key, group key |
+| can_approve | bool | |
+| can_reject | bool | |
+| can_revert | bool | |
+| priority | int | Lower number = higher rank |
+| notification_order | int | Explicit ordering if different |
+| escalation_after_seconds | int nullable | When to notify next assignee |
+| is_active | bool | |
+| created_at | timestamptz | |
+
+### workflow_step_assignment_policy
+
+Step-level approval and notification strategy.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| step_definition_id | uuid fk unique | |
+| approval_mode | text | `priority_chain`, `approve_any_one`, `approve_all`, `notify_all` |
+| required_approvals_count | int nullable | For future quorum support |
+| priority_escalation_enabled | bool | |
+| escalation_timeout_seconds | int nullable | Default timeout before next assignee |
+| reminder_interval_seconds | int nullable | |
+| max_escalation_count | int nullable | |
+| created_at | timestamptz | |
+
+### workflow_transition_definition
+
+Defines edges between steps (From → To with action type).
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_version_id | uuid fk | |
+| from_step_definition_id | uuid fk | Source step |
+| to_step_definition_id | uuid fk nullable | Null for terminal transitions |
+| action_type | text | `approve`, `reject`, `revert`, `custom` |
+| action_code | text | Required for custom actions |
+| transition_label | text | Label above edge in visual builder |
+| description | text | |
+| condition_expression | text nullable | Optional expression on workflow vars |
+| priority | int | Deterministic resolution |
+| created_at | timestamptz | |
+
+**Validation rules**:
+- One transition action can fan out with conditions
+- Only one unconditional transition per `from_step + action_type`
+- `custom` requires `action_code`
+
+### workflow_step_mapping
+
+Supports subworkflow step type—triggers another workflow.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| step_definition_id | uuid fk unique | Only for `subworkflow` steps |
+| child_workflow_definition_id | uuid fk | Target workflow family |
+| child_workflow_version_id | uuid fk nullable | Fixed version if needed |
+| trigger_mode | text | `sync_wait`, `async_wait` |
+| input_mapping | jsonb | Parent vars → child input |
+| output_mapping | jsonb | Child output → parent vars |
+| completion_action | text | Action on parent when child ends |
+| failure_action | text | Action if child fails |
+| created_at | timestamptz | |
+
+### notification_template
+
+User-configurable notification messages per step and event type.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_version_id | uuid fk | |
+| step_definition_id | uuid fk nullable | |
+| event_type | text | `task_created`, `reminder`, `completed` |
+| channel | text | `in_app` for now |
+| title_template | text | User-configurable title |
+| body_template | text | User-configurable body |
+| allow_actor_override | bool | Allow custom messages |
+| supported_variables | jsonb | Allowed template placeholders |
+| created_at | timestamptz | |
+
+## Runtime Tables
+
+Runtime tables describe what is happening right now during workflow execution.
+
+### workflow_instance
+
+Main runtime row for every started workflow.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_version_id | uuid fk | Immutable definition reference |
+| business_key | text nullable | External correlation ID |
+| run_number | int | Nth execution count |
+| status | text | `running`, `waiting`, `paused`, `completed`, `rejected`, `failed`, `cancelled` |
+| current_step_instance_id | uuid nullable | Current pointer |
+| started_by | uuid | Actor who started it |
+| started_at | timestamptz | |
+| completed_at | timestamptz nullable | |
+| parent_workflow_instance_id | uuid nullable | For subworkflow |
+| parent_step_instance_id | uuid nullable | For subworkflow |
+| lock_version | int | Optimistic concurrency |
+| created_at | timestamptz | |
+| updated_at | timestamptz | |
+
+**Indexes**:
+- `(status, updated_at)`
+- `(business_key)`
+- `(parent_workflow_instance_id)`
+
+### workflow_instance_data
+
+Runtime variables separate from main row to avoid bloat.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| workflow_instance_id | uuid pk fk | |
+| input_data | jsonb | Original request payload |
+| context_data | jsonb | Mutable state bag |
+| output_data | jsonb | Terminal result |
+| last_error | jsonb nullable | |
+| updated_at | timestamptz | |
+
+### step_instance
+
+One row per runtime visit of a step. Supports revisits after revert.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_instance_id | uuid fk | |
+| step_definition_id | uuid fk | |
+| attempt_no | int | Increment on retries/revisits |
+| visit_count | int | Times this step visited in workflow |
+| status | text | `pending`, `active`, `waiting`, `completed`, `rejected`, `reverted`, `failed`, `cancelled` |
+| entered_at | timestamptz | |
+| started_at | timestamptz nullable | |
+| completed_at | timestamptz nullable | |
+| waiting_since | timestamptz nullable | |
+| actor_user_id | uuid nullable | Actor who completed the step |
+| result_action | text nullable | `approve`, `reject`, `revert`, `custom` |
+| result_payload | jsonb nullable | |
+| error_payload | jsonb nullable | |
+
+**Indexes**:
+- `(workflow_instance_id, entered_at)`
+- `(status, waiting_since)`
+
+### human_task
+
+Actionable work for users. This is the operational inbox table.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_instance_id | uuid fk | |
+| step_instance_id | uuid fk | |
+| step_definition_id | uuid fk | |
+| assigned_user_id | uuid nullable | Direct user assignment |
+| assigned_role_key | text nullable | Role assignment |
+| assigned_group_key | text nullable | Group assignment |
+| approval_mode_snapshot | text | Copied from step policy |
+| priority_rank | int nullable | Resolved rank for this task |
+| sequence_no | int | Notification/escalation order |
+| status | text | `open`, `queued`, `claimed`, `completed`, `expired`, `cancelled` |
+| available_actions | jsonb | `approve`, `reject`, `revert`, `custom` |
+| due_at | timestamptz nullable | |
+| escalation_due_at | timestamptz nullable | |
+| claimed_at | timestamptz nullable | |
+| completed_at | timestamptz nullable | |
+| created_at | timestamptz | |
+
+**Indexes**:
+- `(status, assigned_user_id)`
+- `(status, assigned_role_key)`
+- `(step_instance_id)`
+
+### workflow_action
+
+Full immutable audit trail of actions.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_instance_id | uuid fk | |
+| step_instance_id | uuid fk nullable | |
+| action_type | text | `start`, `approve`, `reject`, `revert`, `system_complete` |
+| action_code | text nullable | Custom action code |
+| actor_user_id | uuid nullable | Null for system actions |
+| actor_type | text | `user`, `system`, `worker`, `subworkflow` |
+| remark_text | text nullable | User remark from action form |
+| payload | jsonb | Form data, comments, metadata |
+| created_at | timestamptz | |
+| idempotency_key | text nullable | Protects retries |
+
+**Unique key** on non-null `idempotency_key`
+
+### workflow_status_history
+
+Tracks top-level lifecycle changes for reporting.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_instance_id | uuid fk | |
+| old_status | text | |
+| new_status | text | |
+| reason | text nullable | |
+| changed_by_action_id | uuid fk nullable | |
+| created_at | timestamptz | |
+
+### subworkflow_link
+
+Explicit parent-child linkage for resumptions and traceability.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| parent_workflow_instance_id | uuid fk | |
+| parent_step_instance_id | uuid fk | |
+| child_workflow_instance_id | uuid fk | |
+| link_status | text | `running`, `completed`, `failed`, `cancelled` |
+| resume_action | text nullable | Action applied back to parent |
+| linked_at | timestamptz | |
+| completed_at | timestamptz nullable | |
+
+### notification
+
+User-visible in-app notification store.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| user_id | uuid | Recipient |
+| workflow_instance_id | uuid fk nullable | |
+| step_instance_id | uuid fk nullable | |
+| notification_type | text | `task_assigned`, `reminder` |
+| title | text | |
+| body | text | |
+| is_read | bool | |
+| read_at | timestamptz nullable | |
+| created_at | timestamptz | |
+
+### outbox_event
+
+Required for database-as-source-of-truth with RabbitMQ delivery.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| aggregate_type | text | `workflow_instance`, `human_task` |
+| aggregate_id | uuid | |
+| event_type | text | |
+| payload | jsonb | |
+| status | text | `pending`, `published`, `failed` |
+| available_at | timestamptz | Supports delayed retries |
+| published_at | timestamptz nullable | |
+| retry_count | int | |
+| created_at | timestamptz | |
+
+Workers poll this table, publish to RabbitMQ, then mark published.
+
+### engine_checkpoint
+
+Optional but recommended for deterministic resume/debugging.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_instance_id | uuid fk | |
+| step_instance_id | uuid fk nullable | |
+| checkpoint_type | text | `entered_step`, `waiting_user`, `resumed` |
+| snapshot | jsonb | Small state snapshot |
+| created_at | timestamptz | |
+
+### workflow_counter_rollup
+
+For dashboards and quick counts.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| workflow_definition_id | uuid fk | |
+| workflow_version_id | uuid fk nullable | |
+| started_count | bigint | |
+| completed_count | bigint | |
+| rejected_count | bigint | |
+| failed_count | bigint | |
+| active_count | bigint | |
+| updated_at | timestamptz | |
+
+### workflow_step_counter_rollup
+
+Tracks step entry and completion statistics.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| id | uuid pk | |
+| step_definition_id | uuid fk | |
+| entered_count | bigint | |
+| approved_count | bigint | |
+| rejected_count | bigint | |
+| reverted_count | bigint | |
+| waiting_count | bigint | |
+| updated_at | timestamptz | |
+
+## Schema Summary
+
+**Static tables** (8 total):
+- workflow_definition
+- workflow_definition_version
+- workflow_step_definition
+- workflow_step_association
+- workflow_step_assignment_policy
+- workflow_transition_definition
+- workflow_step_mapping
+- notification_template
+
+**Runtime tables** (12 total):
+- workflow_instance
+- workflow_instance_data
+- step_instance
+- human_task
+- workflow_action
+- workflow_status_history
+- subworkflow_link
+- notification
+- outbox_event
+- engine_checkpoint
+- workflow_counter_rollup
+- workflow_step_counter_rollup

@@ -1,0 +1,506 @@
+---
+title: "Installation"
+description: "Complete installation and setup guide for the Workflow Engine Platform"
+---
+
+This guide provides comprehensive instructions for installing and configuring the Workflow Engine Platform for development and production environments.
+
+## System Requirements
+
+### Software Requirements
+
+- **Node.js** 18.x or higher
+- **pnpm** 10.x (package manager)
+- **Python** 3.12 or higher
+- **uv** (Python package manager and runner)
+- **Docker** and Docker Compose (for RabbitMQ)
+- **Git** (for cloning the repository)
+
+### Infrastructure Requirements
+
+- **Neon PostgreSQL** database (or any PostgreSQL 14+ compatible database)
+- **RabbitMQ** 3.13+ (provided via Docker Compose)
+
+<Info>
+The free tier of Neon PostgreSQL is sufficient for development and testing.
+</Info>
+
+## Installation Steps
+
+### 1. Install Prerequisites
+
+<Tabs>
+  <Tab title="macOS">
+    ```bash
+    # Install Node.js via Homebrew
+    brew install node
+
+    # Install pnpm
+    npm install -g pnpm
+
+    # Install Python 3.12+
+    brew install python@3.12
+
+    # Install uv
+    python3 -m pip install --user uv
+
+    # Install Docker Desktop
+    # Download from https://www.docker.com/products/docker-desktop
+    ```
+  </Tab>
+
+  <Tab title="Linux (Ubuntu/Debian)">
+    ```bash
+    # Install Node.js 18+
+    curl -fsSL https://deb.nodesource.com/setup_18.x | sudo -E bash -
+    sudo apt-get install -y nodejs
+
+    # Install pnpm
+    npm install -g pnpm
+
+    # Install Python 3.12+
+    sudo apt-get install python3.12 python3-pip
+
+    # Install uv
+    python3 -m pip install --user uv
+    export PATH="$HOME/.local/bin:$PATH"
+
+    # Install Docker
+    sudo apt-get install docker.io docker-compose-v2
+    ```
+  </Tab>
+
+  <Tab title="Windows">
+    ```powershell
+    # Install Node.js from https://nodejs.org
+
+    # Install pnpm
+    npm install -g pnpm
+
+    # Install Python 3.12+ from https://www.python.org
+
+    # Install uv
+    python -m pip install --user uv
+
+    # Install Docker Desktop
+    # Download from https://www.docker.com/products/docker-desktop
+    ```
+  </Tab>
+</Tabs>
+
+### 2. Clone the Repository
+
+```bash
+git clone <your-repository-url>
+cd workflow-engine-platform
+```
+
+### 3. Install Dependencies
+
+```bash
+pnpm install
+```
+
+This will install all Node.js dependencies for both the web app and API.
+
+<Note>
+The `pnpm` workspace configuration automatically manages dependencies across all apps.
+</Note>
+
+## Database Setup
+
+### Create Neon PostgreSQL Database
+
+<Steps>
+  <Step title="Sign Up for Neon">
+    Create a free account at [neon.tech](https://neon.tech) if you don't have one.
+  </Step>
+
+  <Step title="Create a Project">
+    1. Click "Create Project" in the Neon console
+    2. Choose a region closest to your location
+    3. Select PostgreSQL 14 or higher
+    4. Note the connection string provided
+  </Step>
+
+  <Step title="Get Connection String">
+    Your connection string will look like:
+    ```
+    postgresql://USER:PASSWORD@ep-xxx-xxx.region.aws.neon.tech/neondb?sslmode=require
+    ```
+
+    <Warning>
+    Keep this connection string secure. Never commit it to version control.
+    </Warning>
+  </Step>
+</Steps>
+
+### Bootstrap Database Schema
+
+Run the bootstrap script to create all necessary tables:
+
+```bash
+pnpm bootstrap:db
+```
+
+This script:
+- Creates Better Auth tables (`user`, `session`, `account`, `verification`)
+- Creates workflow engine tables (`workflow_definition`, `workflow_instance`, `step_instance`, `human_task`, etc.)
+- Sets up indexes and constraints
+- Initializes the outbox event table for reliable message delivery
+
+<Accordion title="What tables are created?">
+  The bootstrap script creates the following table groups:
+
+  **Authentication Tables:**
+  - `user` - User accounts
+  - `session` - Active sessions
+  - `account` - OAuth accounts
+  - `verification` - Email verification tokens
+
+  **Workflow Definition Tables:**
+  - `workflow_definition` - Workflow templates
+  - `workflow_definition_version` - Versioned workflow definitions
+  - `workflow_step_definition` - Step definitions
+  - `workflow_transition_definition` - Transition rules
+  - `workflow_step_association` - Task assignment rules
+  - `workflow_step_assignment_policy` - Approval policies
+  - `workflow_step_mapping` - Subworkflow mappings
+  - `notification_template` - Notification templates
+
+  **Workflow Runtime Tables:**
+  - `workflow_instance` - Running workflow instances
+  - `workflow_instance_data` - Instance input/output/context data
+  - `step_instance` - Step execution records
+  - `human_task` - User tasks
+  - `workflow_action` - Action history
+  - `workflow_status_history` - Status changes
+  - `notification` - User notifications
+  - `subworkflow_link` - Parent-child workflow relationships
+
+  **Infrastructure Tables:**
+  - `outbox_event` - Outbox pattern for reliable messaging
+</Accordion>
+
+## RabbitMQ Setup
+
+The platform uses RabbitMQ for asynchronous task processing and event distribution.
+
+### Start RabbitMQ with Docker Compose
+
+```bash
+docker compose -f infra/docker-compose.yml up -d
+```
+
+The Docker Compose configuration includes:
+- RabbitMQ 3.13 with management plugin
+- Default credentials: `workflow:workflow`
+- Ports: 5672 (AMQP), 15672 (Management UI)
+- Persistent volume for data
+
+<Info>
+Access the RabbitMQ Management UI at [http://localhost:15672](http://localhost:15672) with credentials `workflow:workflow`.
+</Info>
+
+### Verify RabbitMQ Health
+
+Check that RabbitMQ is running:
+
+```bash
+docker compose -f infra/docker-compose.yml ps
+```
+
+You should see the `workflow-engine-rabbitmq` container in a healthy state.
+
+## Environment Configuration
+
+### Web Application Configuration
+
+Create `apps/web/.env.local`:
+
+```bash
+# Database (same as API)
+DATABASE_URL=postgresql://USER:PASSWORD@YOUR_NEON_HOST/neondb?sslmode=require
+
+# Better Auth Configuration
+BETTER_AUTH_SECRET=your-secret-key-min-32-chars-long
+BETTER_AUTH_URL=http://localhost:3000
+
+# Public URLs
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+```
+
+<Warning>
+Generate a secure `BETTER_AUTH_SECRET` using: `openssl rand -base64 32`
+</Warning>
+
+### API Configuration
+
+Create `apps/api/.env`:
+
+```bash
+# Workflow Database
+WORKFLOW_DATABASE_URL=postgresql://USER:PASSWORD@YOUR_NEON_HOST/neondb?sslmode=require
+
+# RabbitMQ
+RABBITMQ_URL=amqp://workflow:workflow@localhost:5672/
+
+# Web App Integration
+WEB_APP_URL=http://localhost:3000
+BETTER_AUTH_ISSUER=http://localhost:3000
+BETTER_AUTH_AUDIENCE=http://localhost:3000
+BETTER_AUTH_JWKS_URL=http://localhost:3000/api/auth/jwks
+```
+
+<Accordion title="Production Environment Variables">
+  For production deployments, update the following:
+
+  **Web App:**
+  ```bash
+  BETTER_AUTH_URL=https://your-domain.com
+  NEXT_PUBLIC_APP_URL=https://your-domain.com
+  NEXT_PUBLIC_API_BASE_URL=https://api.your-domain.com
+  ```
+
+  **API:**
+  ```bash
+  WEB_APP_URL=https://your-domain.com
+  BETTER_AUTH_ISSUER=https://your-domain.com
+  BETTER_AUTH_AUDIENCE=https://your-domain.com
+  BETTER_AUTH_JWKS_URL=https://your-domain.com/api/auth/jwks
+  RABBITMQ_URL=amqp://user:pass@production-rabbitmq:5672/
+  ```
+
+  Use managed PostgreSQL and RabbitMQ services for production.
+</Accordion>
+
+## Seed Test Users
+
+After starting the web application, seed test users for development:
+
+```bash
+pnpm --dir apps/web seed:users
+```
+
+This creates five test users with password `password1234`:
+
+| Email | Role |
+|-------|------|
+| `admin@example.com` | Administrator |
+| `manager@example.com` | Manager |
+| `reviewer1@example.com` | Reviewer |
+| `reviewer2@example.com` | Reviewer |
+| `requester@example.com` | Requester |
+
+<Note>
+These users are for development only. Never use them in production.
+</Note>
+
+## Start the Platform
+
+### Development Mode
+
+Start both services in development mode:
+
+<Tabs>
+  <Tab title="Separate Terminals">
+    **Terminal 1 - API:**
+    ```bash
+    pnpm dev:api
+    ```
+
+    **Terminal 2 - Web:**
+    ```bash
+    pnpm dev:web
+    ```
+  </Tab>
+
+  <Tab title="Background Processes">
+    ```bash
+    # Start API in background
+    pnpm dev:api &
+
+    # Start Web in background
+    pnpm dev:web &
+
+    # View logs
+    tail -f nohup.out
+    ```
+  </Tab>
+</Tabs>
+
+The services will be available at:
+- **Web App:** [http://localhost:3000](http://localhost:3000)
+- **API:** [http://localhost:8000](http://localhost:8000)
+- **API Docs:** [http://localhost:8000/docs](http://localhost:8000/docs)
+
+### Production Mode
+
+Build and run in production mode:
+
+```bash
+# Build web app
+pnpm build:web
+
+# Start production server
+cd apps/web && pnpm start
+```
+
+For the API, use a production ASGI server like Gunicorn:
+
+```bash
+pip install gunicorn
+gunicorn api.main:app --workers 4 --worker-class uvicorn.workers.UvicornWorker --bind 0.0.0.0:8000
+```
+
+## Background Workers
+
+The platform requires background workers for processing:
+
+### Outbox Publisher
+
+Publishes outbox events to RabbitMQ:
+
+```bash
+pnpm queue:publish
+```
+
+<Info>
+Run this periodically (every 30-60 seconds) via cron or a scheduler.
+</Info>
+
+### Priority Chain Release Worker
+
+Releases escalated priority chain tasks:
+
+```bash
+pnpm queue:release
+```
+
+<Info>
+Run this every 5-10 minutes to check for tasks ready for escalation.
+</Info>
+
+<Accordion title="Production Worker Setup">
+  For production, use a process manager like systemd or supervisord:
+
+  **systemd service example:**
+  ```ini
+  [Unit]
+  Description=Workflow Engine Outbox Publisher
+  After=network.target
+
+  [Service]
+  Type=simple
+  User=workflow
+  WorkingDirectory=/path/to/workflow-engine-platform
+  ExecStart=/usr/local/bin/pnpm queue:publish
+  Restart=always
+  RestartSec=30
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+</Accordion>
+
+## Verify Installation
+
+### 1. Check Service Health
+
+Verify all services are running:
+
+```bash
+# Check web app
+curl http://localhost:3000
+
+# Check API health
+curl http://localhost:8000/health
+
+# Check RabbitMQ
+curl -u workflow:workflow http://localhost:15672/api/overview
+```
+
+### 2. Test Authentication
+
+1. Open [http://localhost:3000](http://localhost:3000)
+2. Log in with `admin@example.com` / `password1234`
+3. Verify you can access the dashboard
+
+### 3. Test Workflow Creation
+
+Use the API to create a simple workflow:
+
+```bash
+curl -X GET http://localhost:8000/api/v1/workflow-definitions \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+If you receive a JSON response, the installation is successful.
+
+## Troubleshooting
+
+<Accordion title="Database Connection Errors">
+  **Error:** `FATAL: password authentication failed`
+
+  **Solution:**
+  - Verify your Neon connection string is correct
+  - Ensure both `DATABASE_URL` and `WORKFLOW_DATABASE_URL` are identical
+  - Check that SSL mode is set to `require`
+</Accordion>
+
+<Accordion title="RabbitMQ Connection Issues">
+  **Error:** `pika.exceptions.AMQPConnectionError`
+
+  **Solution:**
+  - Ensure RabbitMQ container is running: `docker ps`
+  - Verify port 5672 is not in use by another service
+  - Check firewall settings allow local connections
+  - Restart RabbitMQ: `docker compose -f infra/docker-compose.yml restart`
+</Accordion>
+
+<Accordion title="uv Command Not Found">
+  **Error:** `bash: uv: command not found`
+
+  **Solution:**
+  - Install uv: `python3 -m pip install --user uv`
+  - Add to PATH: `export PATH="$HOME/.local/bin:$PATH"`
+  - Add to shell profile for persistence:
+    ```bash
+    echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+    source ~/.bashrc
+    ```
+</Accordion>
+
+<Accordion title="Port Already in Use">
+  **Error:** `EADDRINUSE: address already in use :::3000`
+
+  **Solution:**
+  - Kill the process using the port:
+    ```bash
+    # macOS/Linux
+    lsof -ti:3000 | xargs kill -9
+
+    # Windows
+    netstat -ano | findstr :3000
+    taskkill /PID <PID> /F
+    ```
+  - Or change the port in your configuration
+</Accordion>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart Guide" icon="rocket" href="/quickstart">
+    Create your first workflow in 10 minutes
+  </Card>
+  <Card title="Configuration Reference" icon="gear" href="/architecture/stack">
+    Advanced configuration options
+  </Card>
+  <Card title="Deployment Guide" icon="cloud" href="/architecture/deployment">
+    Deploy to production environments
+  </Card>
+  <Card title="Workflow Builder" icon="code" href="/guides/workflow-builder">
+    Set up your development environment
+  </Card>
+</CardGroup>

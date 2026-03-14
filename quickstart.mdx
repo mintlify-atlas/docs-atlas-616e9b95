@@ -1,80 +1,290 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get up and running with the Workflow Engine Platform in 10 minutes"
 ---
 
-## Get started in three steps
+Get your Workflow Engine Platform up and running in 10 minutes. This guide will walk you through setting up the environment, creating your first workflow, and executing it.
 
-Get your documentation site running locally and make your first customization.
+## Prerequisites
 
-### Step 1: Set up your local environment
+Before you begin, ensure you have the following installed:
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+- **Node.js** 18+ and **pnpm** 10.x
+- **Python** 3.12+
+- **uv** (Python package manager)
+- **Neon PostgreSQL** account (free tier works)
+- **Docker** (for RabbitMQ)
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+If `uv` is not installed, you can install it with: `python3 -m pip install --user uv`
 </Note>
+
+## Setup
+
+<Steps>
+  <Step title="Clone and Install Dependencies">
+    Clone the repository and install dependencies:
+
+    ```bash
+    git clone <your-repo-url>
+    cd workflow-engine-platform
+    pnpm install
+    ```
+  </Step>
+
+  <Step title="Configure Environment Variables">
+    Create environment files for both the web app and API:
+
+    ```bash
+    cp apps/web/.env.example apps/web/.env.local
+    cp apps/api/.env.example apps/api/.env
+    ```
+
+    Update the database connection strings in both files with your Neon PostgreSQL credentials:
+
+    **apps/web/.env.local:**
+    ```bash
+    DATABASE_URL=postgresql://USER:PASSWORD@YOUR_NEON_HOST/neondb?sslmode=require
+    BETTER_AUTH_SECRET=replace-with-a-long-random-secret
+    BETTER_AUTH_URL=http://localhost:3000
+    NEXT_PUBLIC_APP_URL=http://localhost:3000
+    NEXT_PUBLIC_API_BASE_URL=http://localhost:8000
+    ```
+
+    **apps/api/.env:**
+    ```bash
+    WORKFLOW_DATABASE_URL=postgresql://USER:PASSWORD@YOUR_NEON_HOST/neondb?sslmode=require
+    RABBITMQ_URL=amqp://workflow:workflow@localhost:5672/
+    WEB_APP_URL=http://localhost:3000
+    BETTER_AUTH_ISSUER=http://localhost:3000
+    BETTER_AUTH_AUDIENCE=http://localhost:3000
+    BETTER_AUTH_JWKS_URL=http://localhost:3000/api/auth/jwks
+    ```
+  </Step>
+
+  <Step title="Bootstrap Database Schema">
+    Initialize the database schema on Neon:
+
+    ```bash
+    pnpm bootstrap:db
+    ```
+
+    This creates all necessary tables for Better Auth and the workflow engine.
+  </Step>
+
+  <Step title="Start RabbitMQ">
+    Start RabbitMQ using Docker Compose:
+
+    ```bash
+    docker compose -f infra/docker-compose.yml up -d
+    ```
+
+    <Info>
+    RabbitMQ will be available at `localhost:5672` for the queue and `localhost:15672` for the management UI.
+    </Info>
+  </Step>
+
+  <Step title="Start the Services">
+    Start both the API and web application:
+
+    <CodeGroup>
+      ```bash Terminal 1 - API
+      pnpm dev:api
+      ```
+
+      ```bash Terminal 2 - Web
+      pnpm dev:web
+      ```
+    </CodeGroup>
+
+    The API will run on `http://localhost:8000` and the web app on `http://localhost:3000`.
+  </Step>
+
+  <Step title="Seed Test Users">
+    After the web app is running, seed test users:
+
+    ```bash
+    pnpm --dir apps/web seed:users
+    ```
+
+    This creates the following test users (password: `password1234`):
+    - `admin@example.com`
+    - `manager@example.com`
+    - `reviewer1@example.com`
+    - `reviewer2@example.com`
+    - `requester@example.com`
+  </Step>
+</Steps>
+
+## Create Your First Workflow
+
+Now that your environment is set up, let's create a simple approval workflow.
+
+### 1. Define the Workflow
+
+Create a workflow definition with steps and transitions using the API:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/workflow-definitions \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -d '{
+  "key": "simple-approval",
+  "name": "Simple Approval Workflow",
+  "description": "A basic approval workflow with one reviewer",
+  "steps": [
+    {
+      "stepCode": "start",
+      "stepLabel": "Start",
+      "stepType": "start",
+      "sequenceHint": 0,
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain"
+      },
+      "associations": []
+    },
+    {
+      "stepCode": "review",
+      "stepLabel": "Review Request",
+      "stepType": "human_task",
+      "sequenceHint": 1,
+      "remarkRequiredOnApprove": false,
+      "remarkRequiredOnReject": true,
+      "assignmentPolicy": {
+        "approvalMode": "approve_any_one",
+        "reminderIntervalSeconds": 3600
+      },
+      "associations": [
+        {
+          "associationType": "user",
+          "associationValue": "reviewer1@example.com",
+          "canApprove": true,
+          "canReject": true
+        }
+      ],
+      "notificationTemplate": {
+        "titleTemplate": "Action required: {stepLabel}",
+        "bodyTemplate": "Please review the request for {workflowName}"
+      }
+    },
+    {
+      "stepCode": "end",
+      "stepLabel": "Completed",
+      "stepType": "end",
+      "sequenceHint": 2,
+      "isTerminal": true,
+      "assignmentPolicy": {
+        "approvalMode": "priority_chain"
+      },
+      "associations": []
+    }
+  ],
+  "transitions": [
+    {
+      "fromStepCode": "start",
+      "toStepCode": "review",
+      "actionType": "approve",
+      "transitionLabel": "Submit for Review"
+    },
+    {
+      "fromStepCode": "review",
+      "toStepCode": "end",
+      "actionType": "approve",
+      "transitionLabel": "Approve"
+    },
+    {
+      "fromStepCode": "review",
+      "toStepCode": "end",
+      "actionType": "reject",
+      "transitionLabel": "Reject"
+    }
+  ]
+}'
+```
+
+### 2. Start a Workflow Instance
+
+Start a new instance of the workflow:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/workflow-instances \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -d '{
+  "workflowKey": "simple-approval",
+  "businessKey": "REQ-001",
+  "inputData": {
+    "requestor": "John Doe",
+    "amount": 1500,
+    "description": "Office supplies purchase"
+  },
+  "contextData": {
+    "requestor": "John Doe",
+    "amount": 1500,
+    "description": "Office supplies purchase"
+  }
+}'
+```
+
+The workflow instance will start and create a task for `reviewer1@example.com`.
+
+### 3. View Tasks
+
+Retrieve tasks assigned to the current user:
+
+```bash
+curl -X GET http://localhost:8000/api/v1/me/tasks \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN"
+```
+
+### 4. Approve a Task
+
+Take action on a task:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/human-tasks/{task_id}/approve \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_JWT_TOKEN" \
+  -d '{
+  "actionType": "approve",
+  "remark": "Looks good, approved",
+  "payload": {}
+}'
+```
+
+The workflow will transition to the end step and mark the instance as completed.
+
+## Background Workers
+
+For production use, run these worker processes:
+
+<CodeGroup>
+  ```bash Publish Outbox Events
+  pnpm queue:publish
+  ```
+
+  ```bash Release Priority Chain Tasks
+  pnpm queue:release
+  ```
+</CodeGroup>
+
+<Tip>
+These commands should be run periodically (e.g., via cron) to publish outbox events to RabbitMQ and release escalated priority chain tasks.
+</Tip>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Core Concepts" icon="book" href="/concepts/workflow-definitions">
+    Learn about workflows, steps, transitions, and tasks
+  </Card>
+  <Card title="Build Workflows" icon="hammer" href="/guides/creating-workflows">
+    Create complex workflows with conditional logic
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/definitions/create">
+    Explore the complete API documentation
+  </Card>
+  <Card title="Architecture" icon="diagram-project" href="/architecture/overview">
+    Understand the platform architecture
+  </Card>
+</CardGroup>

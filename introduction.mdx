@@ -1,0 +1,113 @@
+---
+title: Introduction
+description: Build powerful async workflow engines with human-in-the-loop processing
+---
+
+# Welcome to Workflow Engine Platform
+
+The Workflow Engine Platform is a comprehensive solution for building async workflow engines with human-in-the-loop processing. Design complex approval workflows, manage task assignments with priority escalation, and maintain complete audit trails—all powered by a visual workflow builder and robust execution engine.
+
+## What is Workflow Engine Platform?
+
+Workflow Engine Platform enables you to create reusable workflow templates where each step can trigger human approvals, automated actions, or child workflows. Built on a foundation of immutable versioning and database-backed state management, it ensures your long-running business processes remain reliable and auditable.
+
+<CardGroup cols={2}>
+  <Card title="Visual Workflow Builder" icon="diagram-project" href="/guides/workflow-builder">
+    Design workflows visually with React Flow—drag, connect, and configure steps and transitions
+  </Card>
+  <Card title="Human-in-the-Loop Tasks" icon="user-check" href="/concepts/human-tasks">
+    Pause workflows for approvals with priority chains, escalation, and flexible assignment policies
+  </Card>
+  <Card title="Subworkflow Support" icon="sitemap" href="/concepts/subworkflows">
+    Trigger child workflows and resume parents automatically when children complete
+  </Card>
+  <Card title="Complete Audit Trail" icon="clipboard-list" href="/guides/managing-instances">
+    Track every action, status change, and notification with immutable action history
+  </Card>
+</CardGroup>
+
+## Key Features
+
+<AccordionGroup>
+  <Accordion title="Visual workflow builder with React Flow" icon="wand-magic-sparkles">
+    Create and edit workflows using an intuitive drag-and-drop interface. Define steps, configure transitions, and visualize your entire workflow graph—all saved with immutable versioning.
+  </Accordion>
+  
+  <Accordion title="Human-in-the-loop task approvals" icon="user-check">
+    Workflows can pause and wait for human actions. Assign tasks to users, roles, or groups with configurable approval modes like priority chains, approve-any-one, or approve-all.
+  </Accordion>
+  
+  <Accordion title="Priority chain and approval policies" icon="list-ol">
+    Notify the highest-priority assignee first, then escalate to the next after a timeout. Configure escalation rules, reminder intervals, and required approvals per step.
+  </Accordion>
+  
+  <Accordion title="Subworkflow support with parent-child linking" icon="diagram-nested">
+    Trigger child workflows from any step. The parent workflow pauses automatically and resumes when the child completes, with output mapping back to parent context.
+  </Accordion>
+  
+  <Accordion title="Better Auth email/password authentication" icon="lock">
+    Secure your platform with Better Auth-powered authentication. Support multi-user workflows with email/password login and JWT-based API access.
+  </Accordion>
+  
+  <Accordion title="RabbitMQ-backed async notifications" icon="bell">
+    Reliable notification delivery via RabbitMQ with outbox pattern. The database remains the source of truth while RabbitMQ handles async delivery.
+  </Accordion>
+  
+  <Accordion title="Immutable workflow versioning" icon="code-branch">
+    Workflow definitions support versioning. Runtime instances point to immutable versions so in-flight workflows never break when definitions change.
+  </Accordion>
+  
+  <Accordion title="Full audit trail and action history" icon="clock-rotate-left">
+    Every workflow action, status change, and notification is recorded. Query complete history for compliance, debugging, and analytics.
+  </Accordion>
+</AccordionGroup>
+
+## Architecture Overview
+
+The platform separates **static workflow definitions** from **runtime execution data**:
+
+- **Static side**: Workflow definitions, steps, transitions, assignment rules, approval policies, and notification templates
+- **Runtime side**: Workflow instances, step instances, human tasks, action history, notifications, and subworkflow links
+
+This separation ensures you can edit and version workflow definitions without corrupting in-flight workflows.
+
+<CardGroup cols={2}>
+  <Card title="Stack" icon="layer-group" href="/architecture/stack">
+    FastAPI + Next.js + PostgreSQL + RabbitMQ
+  </Card>
+  <Card title="Database Schema" icon="database" href="/architecture/database-schema">
+    Explore the complete schema for static and runtime tables
+  </Card>
+  <Card title="Execution Model" icon="gears" href="/architecture/execution-model">
+    Learn how workflows execute, transition, and handle failures
+  </Card>
+  <Card title="Deployment" icon="rocket" href="/architecture/deployment">
+    Deploy to production with Neon Postgres and Docker
+  </Card>
+</CardGroup>
+
+## Use Cases
+
+Workflow Engine Platform is ideal for:
+
+- **Approval workflows**: Purchase orders, expense approvals, document reviews
+- **Multi-stage processes**: Onboarding, loan applications, compliance reviews
+- **Human + automation**: Combine automated steps with human decision points
+- **Long-running workflows**: Workflows that pause for days or weeks waiting for approvals
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="bolt" href="/quickstart">
+    Get up and running in 10 minutes
+  </Card>
+  <Card title="Core Concepts" icon="book" href="/concepts/workflow-definitions">
+    Understand workflows, steps, and transitions
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the REST API
+  </Card>
+  <Card title="Guides" icon="map" href="/guides/creating-workflows">
+    Learn how to build and manage workflows
+  </Card>
+</CardGroup>

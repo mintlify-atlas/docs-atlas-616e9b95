@@ -1,0 +1,532 @@
+---
+title: Managing Workflow Instances
+description: Start workflow instances, view instance details, check current step, view action history, and filter instances
+---
+
+## Overview
+
+Workflow instances are runtime executions of published workflow definitions. This guide covers creating instances, monitoring their progress, viewing history, and understanding lifecycle states.
+
+## Prerequisites
+
+- Published workflow definition
+- Valid authentication token
+- API access to the workflow engine
+
+## Starting a Workflow Instance
+
+<Steps>
+
+### Step 1: Choose a published workflow
+
+Only workflows with `status: "active"` and a published version can be instantiated.
+
+List available workflows:
+
+```bash
+curl http://localhost:8000/api/v1/workflow-definitions \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+Look for workflows with `"status": "active"`.
+
+### Step 2: Prepare the start request
+
+Create a JSON payload with input data:
+
+```json
+{
+  "workflowKey": "vendor_onboarding",
+  "businessKey": "vendor-12345",
+  "inputData": {
+    "vendorName": "Acme Corp",
+    "vendorId": "12345",
+    "requestedBy": "requester@example.com"
+  },
+  "contextData": {
+    "vendorName": "Acme Corp",
+    "vendorId": "12345"
+  }
+}
+```
+
+**Parameters**:
+
+- `workflowKey` OR `workflowDefinitionId`: Identifier for the workflow (use one)
+- `businessKey`: Optional external correlation ID
+- `inputData`: Immutable initial payload
+- `contextData`: Mutable state bag (modified during execution)
+
+<Info>
+If you provide the same `businessKey` multiple times, `run_number` increments automatically (1, 2, 3, ...).
+</Info>
+
+### Step 3: Start the instance
+
+Send a POST request to create the instance:
+
+```bash
+curl -X POST http://localhost:8000/api/v1/workflow-instances \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_TOKEN" \
+  -d '{
+    "workflowKey": "vendor_onboarding",
+    "businessKey": "vendor-12345",
+    "inputData": {
+      "vendorName": "Acme Corp"
+    },
+    "contextData": {
+      "vendorName": "Acme Corp"
+    }
+  }'
+```
+
+**Response**:
+
+```json
+{
+  "item": {
+    "id": "880e8400-e29b-41d4-a716-446655440000",
+    "workflowDefinitionId": "550e8400-e29b-41d4-a716-446655440000",
+    "workflowDefinitionKey": "vendor_onboarding",
+    "workflowDefinitionName": "Vendor Onboarding",
+    "workflowVersionId": "660e8400-e29b-41d4-a716-446655440000",
+    "businessKey": "vendor-12345",
+    "runNumber": 1,
+    "status": "waiting",
+    "currentStepCode": "manager_approval",
+    "currentStepLabel": "Manager Approval",
+    "startedBy": "770e8400-e29b-41d4-a716-446655440000",
+    "startedAt": "2026-03-14T10:30:00Z",
+    "completedAt": null,
+    "inputData": {
+      "vendorName": "Acme Corp"
+    },
+    "contextData": {
+      "vendorName": "Acme Corp"
+    },
+    "outputData": {},
+    "steps": [
+      {
+        "id": "990e8400-e29b-41d4-a716-446655440000",
+        "stepCode": "start_request",
+        "stepLabel": "Start Request",
+        "stepType": "start",
+        "status": "completed",
+        "visitCount": 1,
+        "enteredAt": "2026-03-14T10:30:00Z",
+        "completedAt": "2026-03-14T10:30:01Z",
+        "waitingSince": null,
+        "resultAction": "approve"
+      },
+      {
+        "id": "aa0e8400-e29b-41d4-a716-446655440000",
+        "stepCode": "manager_approval",
+        "stepLabel": "Manager Approval",
+        "stepType": "human_task",
+        "status": "waiting",
+        "visitCount": 1,
+        "enteredAt": "2026-03-14T10:30:01Z",
+        "completedAt": null,
+        "waitingSince": "2026-03-14T10:30:01Z",
+        "resultAction": null
+      }
+    ],
+    "actions": [
+      {
+        "id": "bb0e8400-e29b-41d4-a716-446655440000",
+        "actionType": "start",
+        "actionCode": null,
+        "actorUserId": "770e8400-e29b-41d4-a716-446655440000",
+        "actorType": "user",
+        "remarkText": null,
+        "payload": {
+          "workflowDefinitionKey": "vendor_onboarding",
+          "businessKey": "vendor-12345"
+        },
+        "createdAt": "2026-03-14T10:30:00Z"
+      }
+    ],
+    "graphJson": {...},
+    "builderLayout": {...}
+  }
+}
+```
+
+### Step 4: Understand the response
+
+**Instance status values**:
+
+- `running`: Workflow is actively executing
+- `waiting`: Paused on a human task
+- `paused`: Waiting on a child workflow
+- `completed`: Successfully finished
+- `rejected`: Rejected via reject action
+- `failed`: System failure
+- `cancelled`: Manually cancelled
+
+**Step status values**:
+
+- `pending`: Not yet started
+- `active`: Currently executing
+- `waiting`: Waiting for user action
+- `completed`: Successfully finished
+- `rejected`: User rejected
+- `reverted`: Sent back via revert
+- `failed`: Execution error
+- `cancelled`: Cancelled
+
+</Steps>
+
+## Viewing Instance Details
+
+<Steps>
+
+### Step 1: Get the instance ID
+
+Use the `id` from the start response, or list all instances:
+
+```bash
+curl http://localhost:8000/api/v1/workflow-instances \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+**Response**:
+
+```json
+{
+  "items": [
+    {
+      "id": "880e8400-e29b-41d4-a716-446655440000",
+      "workflowDefinitionKey": "vendor_onboarding",
+      "workflowDefinitionName": "Vendor Onboarding",
+      "businessKey": "vendor-12345",
+      "runNumber": 1,
+      "status": "waiting",
+      "currentStepCode": "manager_approval",
+      "currentStepLabel": "Manager Approval",
+      "startedBy": "770e8400-e29b-41d4-a716-446655440000",
+      "startedAt": "2026-03-14T10:30:00Z",
+      "completedAt": null
+    }
+  ]
+}
+```
+
+### Step 2: Fetch full instance details
+
+```bash
+curl http://localhost:8000/api/v1/workflow-instances/{instance_id} \
+  -H "Authorization: Bearer YOUR_TOKEN"
+```
+
+The response includes:
+
+- **Instance metadata**: Status, current step, timestamps
+- **Steps array**: All step instances with visit counts
+- **Actions array**: Complete audit trail
+- **Data objects**: Input, context, and output data
+- **Graph JSON**: Workflow definition snapshot
+
+</Steps>
+
+## Understanding Step Instances
+
+Each time a workflow enters a step, a new `step_instance` is created:
+
+```json
+{
+  "id": "aa0e8400-e29b-41d4-a716-446655440000",
+  "stepCode": "manager_approval",
+  "stepLabel": "Manager Approval",
+  "stepType": "human_task",
+  "status": "waiting",
+  "visitCount": 1,
+  "enteredAt": "2026-03-14T10:30:01Z",
+  "completedAt": null,
+  "waitingSince": "2026-03-14T10:30:01Z",
+  "resultAction": null
+}
+```
+
+**Visit count**: Increments each time the workflow revisits a step (e.g., after revert).
+
+**Example timeline**:
+```
+1. start_request (visit 1) → completed
+2. manager_approval (visit 1) → reverted
+3. start_request (visit 2) → completed
+4. manager_approval (visit 2) → waiting
+```
+
+## Viewing Action History
+
+The `actions` array provides a complete audit trail:
+
+```json
+{
+  "id": "cc0e8400-e29b-41d4-a716-446655440000",
+  "actionType": "approve",
+  "actionCode": null,
+  "actorUserId": "770e8400-e29b-41d4-a716-446655440000",
+  "actorType": "user",
+  "remarkText": "Vendor verification complete",
+  "payload": {},
+  "createdAt": "2026-03-14T11:00:00Z"
+}
+```
+
+**Action types**:
+
+- `start`: Workflow started
+- `approve`: User approved a step
+- `reject`: User rejected a step
+- `revert`: User sent the workflow back
+- `custom`: Custom action with `actionCode`
+- `system_complete`: Automated step completion
+
+**Actor types**:
+
+- `user`: Human actor
+- `system`: Automated action
+- `worker`: Background job
+- `subworkflow`: Child workflow completion
+
+## Filtering and Searching Instances
+
+The list endpoint returns all instances. You can filter client-side by:
+
+- **Status**: `status === "waiting"`
+- **Workflow key**: `workflowDefinitionKey === "vendor_onboarding"`
+- **Business key**: `businessKey === "vendor-12345"`
+- **Current step**: `currentStepCode === "manager_approval"`
+
+<Tip>
+For production use, implement server-side filtering with query parameters.
+</Tip>
+
+## Lifecycle States Explained
+
+<Steps>
+
+### 1. Running
+
+The workflow is actively progressing through automatic steps.
+
+```json
+{
+  "status": "running",
+  "currentStepCode": "system_validation",
+  "currentStepLabel": "System Validation"
+}
+```
+
+### 2. Waiting
+
+The workflow is paused on a `human_task` step, waiting for user action.
+
+```json
+{
+  "status": "waiting",
+  "currentStepCode": "manager_approval",
+  "currentStepLabel": "Manager Approval"
+}
+```
+
+Tasks are created in the `human_task` table and notifications are sent.
+
+### 3. Paused
+
+The workflow is waiting for a child workflow to complete.
+
+```json
+{
+  "status": "paused",
+  "currentStepCode": "background_check",
+  "currentStepLabel": "Background Check"
+}
+```
+
+The child workflow is linked in the `subworkflow_link` table.
+
+### 4. Completed
+
+The workflow reached a terminal step via an `approve` action.
+
+```json
+{
+  "status": "completed",
+  "currentStepCode": "completed",
+  "currentStepLabel": "Completed",
+  "completedAt": "2026-03-14T12:00:00Z"
+}
+```
+
+The `output_data` is copied from `context_data`.
+
+### 5. Rejected
+
+The workflow reached a terminal step via a `reject` action.
+
+```json
+{
+  "status": "rejected",
+  "currentStepCode": "completed",
+  "currentStepLabel": "Completed",
+  "completedAt": "2026-03-14T11:30:00Z"
+}
+```
+
+### 6. Failed
+
+A system error occurred during execution.
+
+```json
+{
+  "status": "failed",
+  "currentStepCode": "system_task",
+  "currentStepLabel": "System Task"
+}
+```
+
+</Steps>
+
+## Monitoring Current Step
+
+The `currentStepCode` and `currentStepLabel` fields always reflect the active step:
+
+```json
+{
+  "currentStepCode": "manager_approval",
+  "currentStepLabel": "Manager Approval"
+}
+```
+
+For completed workflows, this shows the terminal step.
+
+## Working with Workflow Data
+
+### Input Data (Immutable)
+
+The original payload provided when starting the instance:
+
+```json
+{
+  "inputData": {
+    "vendorName": "Acme Corp",
+    "vendorId": "12345"
+  }
+}
+```
+
+This never changes during execution.
+
+### Context Data (Mutable)
+
+The working state bag that can be modified by steps:
+
+```json
+{
+  "contextData": {
+    "vendorName": "Acme Corp",
+    "vendorId": "12345",
+    "approvalDate": "2026-03-14",
+    "approvedBy": "manager@example.com"
+  }
+}
+```
+
+Subworkflows can map data into and out of `contextData`.
+
+### Output Data (Result)
+
+The final result when the workflow completes:
+
+```json
+{
+  "outputData": {
+    "vendorName": "Acme Corp",
+    "vendorId": "12345",
+    "approvalDate": "2026-03-14",
+    "approvedBy": "manager@example.com",
+    "status": "approved"
+  }
+}
+```
+
+Copied from `contextData` when the workflow reaches a terminal step.
+
+## Parent-Child Workflow Links
+
+When a workflow triggers a subworkflow:
+
+```json
+{
+  "parentWorkflowInstanceId": "880e8400-e29b-41d4-a716-446655440000",
+  "parentStepInstanceId": "aa0e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+The child instance includes references to the parent. The parent workflow status changes to `paused` until the child completes.
+
+## Best Practices
+
+<CardGroup cols={2}>
+
+<Card title="Use Business Keys" icon="key">
+Provide meaningful `businessKey` values to correlate workflow instances with external systems.
+</Card>
+
+<Card title="Monitor Status" icon="chart-line">
+Regularly poll the instance list endpoint to monitor active workflows.
+</Card>
+
+<Card title="Preserve Input Data" icon="database">
+Include all relevant context in `inputData` for auditability.
+</Card>
+
+<Card title="Check Visit Counts" icon="repeat">
+High visit counts may indicate a loop—review `maxVisitsPerInstance` guards.
+</Card>
+
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+
+<Accordion title="Instance starts but immediately completes">
+Check that your workflow has human task steps. A workflow with only `start` and `end` steps completes instantly.
+</Accordion>
+
+<Accordion title="Instance stuck in 'waiting' status">
+Verify:
+1. Human tasks were created
+2. Users were notified
+3. Assignees exist in the database
+4. No permission issues
+</Accordion>
+
+<Accordion title="Instance shows 'paused' indefinitely">
+The child workflow may have failed. Check the child instance status in the database.
+</Accordion>
+
+<Accordion title="Visit count exceeds maxVisitsPerInstance">
+The workflow has entered an infinite loop. Review your revert transitions and add appropriate guards.
+</Accordion>
+
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+
+<Card title="Task Actions" icon="check-circle" href="/guides/task-actions">
+Learn how to approve, reject, and revert tasks
+</Card>
+
+<Card title="Notifications" icon="bell" href="/guides/notifications">
+Understand how notifications work and how to mark them as read
+</Card>
+
+</CardGroup>
