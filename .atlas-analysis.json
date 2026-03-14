@@ -1,0 +1,139 @@
+{
+  "projectType": "saas",
+  "projectName": "Workflow Engine Platform",
+  "projectDescription": "Async workflow engine with human-in-the-loop processing for building approval workflows",
+  "theme": "mint",
+  "primaryColor": "#10b981",
+  "lightColor": "#34d399",
+  "darkColor": "#059669",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/workflow-definitions",
+              "concepts/workflow-instances",
+              "concepts/steps-and-transitions",
+              "concepts/human-tasks",
+              "concepts/approval-modes",
+              "concepts/subworkflows"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/creating-workflows",
+              "guides/workflow-builder",
+              "guides/managing-instances",
+              "guides/task-actions",
+              "guides/notifications"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication"
+            ]
+          },
+          {
+            "group": "Workflow Definitions",
+            "pages": [
+              "api/definitions/list",
+              "api/definitions/get",
+              "api/definitions/create",
+              "api/definitions/update",
+              "api/definitions/publish",
+              "api/definitions/clone"
+            ]
+          },
+          {
+            "group": "Workflow Instances",
+            "pages": [
+              "api/instances/list",
+              "api/instances/get",
+              "api/instances/start"
+            ]
+          },
+          {
+            "group": "Human Tasks",
+            "pages": [
+              "api/tasks/list",
+              "api/tasks/approve",
+              "api/tasks/reject",
+              "api/tasks/revert",
+              "api/tasks/action"
+            ]
+          },
+          {
+            "group": "Notifications",
+            "pages": [
+              "api/notifications/list",
+              "api/notifications/mark-read"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Architecture",
+        "groups": [
+          {
+            "group": "Design",
+            "pages": [
+              "architecture/overview",
+              "architecture/database-schema",
+              "architecture/static-vs-runtime",
+              "architecture/execution-model"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
+              "architecture/stack",
+              "architecture/deployment",
+              "architecture/rabbitmq"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Visual workflow builder with React Flow",
+    "Human-in-the-loop task approvals",
+    "Priority chain and approval policies",
+    "Subworkflow support with parent-child linking",
+    "Better Auth email/password authentication",
+    "RabbitMQ-backed async notifications",
+    "Immutable workflow versioning",
+    "Full audit trail and action history"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/workflow-definitions - Create workflow definition",
+    "PUT /api/v1/workflow-definitions/{id} - Update workflow definition",
+    "POST /api/v1/workflow-definitions/{id}/publish - Publish workflow version",
+    "POST /api/v1/workflow-instances - Start workflow instance",
+    "GET /api/v1/workflow-instances/{id} - Get workflow instance details",
+    "GET /api/v1/me/tasks - List current user's tasks",
+    "POST /api/v1/human-tasks/{id}/approve - Approve a task",
+    "POST /api/v1/human-tasks/{id}/reject - Reject a task",
+    "POST /api/v1/human-tasks/{id}/revert - Revert a task",
+    "GET /api/v1/me/notifications - List user notifications"
+  ]
+}
